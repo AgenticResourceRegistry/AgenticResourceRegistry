@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Kiro JSONL session parser.
@@ -38,7 +39,19 @@ import json
 import math
 from datetime import UTC, datetime
 
-from .base import basic_event, dict_field, list_field, load_line, pick_timestamp, str_field
+from .base import (
+    basic_event,
+    dict_field,
+    list_field,
+    load_line,
+    meta_assistant,
+    meta_time,
+    meta_tool_call,
+    meta_tool_result,
+    meta_user,
+    pick_timestamp,
+    str_field,
+)
 
 
 def parse_rows(rows: list[dict]) -> list[dict]:
@@ -55,6 +68,15 @@ def parse_rows(rows: list[dict]) -> list[dict]:
     # Maps toolUseId -> index in events list for merge-on-result
     tool_use_index: dict[str, int] = {}
     latest_model = ""
+    fallback_model = ""
+    for row in rows:
+        record = load_line(row.get("raw_line") or "") or {}
+        if record.get("kind") == "KiroSessionModel":
+            fallback_model = (
+                normalize_model_id(row.get("session_model"))
+                or normalize_model_id(dict_field(record, "data").get("modelId"))
+                or fallback_model
+            )
 
     # A sub-execution's prompt is supplied by the client rather than read from
     # the transcript, so it arrives appended and would otherwise sort after the
@@ -102,14 +124,16 @@ def parse_rows(rows: list[dict]) -> list[dict]:
         jsonl_ts = _epoch_to_clickhouse(epoch_s) if epoch_s else None
         ts = pick_timestamp(jsonl_ts, row_ts, ingested_at)
 
+        if kind == "KiroSessionModel":
+            continue  # Companion metadata is not a user-visible event.
         if kind == "KiroCredits":
             # Synthetic row written by kiro_session_push with lifetime credits.
             row_credits = row.get("credits") or data.get("credits")
             credits = _as_credits(row_credits)
             if row_credits and credits is not None:
                 attributes = {"credits": str(row_credits)}
-                if latest_model:
-                    attributes["model"] = latest_model
+                if latest_model or fallback_model:
+                    attributes["model"] = latest_model or fallback_model
                 events.append(
                     {
                         "timestamp": ts,
@@ -463,16 +487,197 @@ def _extract_result_text(result_content: list) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Insights normalization, shared by deterministic metrics and transcripts
+# ---------------------------------------------------------------------------
+
+
+def _insight_tool(name: str, tool_id: str, args: dict) -> dict:
+    """Keep the native name while mapping known Kiro operations to metric kinds."""
+    args = {key: value for key, value in args.items() if not key.startswith("__")}
+    kind = {"execute_bash": "bash", "fs_read": "read", "use_subagent": "subagent"}.get(name, name)
+    if name == "fs_write":
+        kind = "edit" if args.get("command") == "str_replace" else "write"
+        args.pop("command", None)  # This is an operation tag, not a shell command.
+    if kind == "write":
+        args = {**args, "content": args.get("content", args.get("file_text", ""))}
+    if kind == "edit":
+        args = {
+            **args,
+            "edits": [
+                {
+                    "oldText": args.get("oldStr", args.get("old_string", args.get("old_str", ""))),
+                    "newText": args.get("newStr", args.get("new_string", args.get("new_str", ""))),
+                }
+            ],
+        }
+    return meta_tool_call(name, tool_id, args, kind)
+
+
+def meta_records(entries: list[dict]) -> list[dict]:
+    """Normalize V2 and enveloped V3 records without inventing assistant messages.
+
+    Standalone V3 tool calls use `tool_calls` records. They contribute tool
+    metrics, but do not count as assistant replies. V2 timestamps are inherited
+    from the last timestamped prompt, as in the trace parser.
+    """
+    records: list[dict] = []
+    tool_names: dict[str, str] = {}
+    seen_tools: set[str] = set()
+    last_ts = ""
+
+    def tool(name: str, tool_id: str, args: dict) -> dict | None:
+        """Normalize each identified tool call once and remember its name for result attribution."""
+        if tool_id and tool_id in seen_tools:
+            return None
+        if tool_id:
+            seen_tools.add(tool_id)
+            tool_names[tool_id] = name
+        return _insight_tool(name, tool_id, args)
+
+    # The CLI appends an injected sub-execution prompt; process it before its reply.
+    entries = sorted(
+        entries, key=lambda entry: 0 if dict_field(entry, "payload").get("_observalSubExecutionPrompt") else 1
+    )
+    for entry in entries:
+        payload = dict_field(entry, "payload")
+        ts = str_field(entry, "timestamp")
+        if payload:
+            last_ts = ts or last_ts
+            ptype = str_field(payload, "type")
+            if ptype == "user":
+                text = str_field(payload, "content")
+                if text.strip():
+                    records.append(meta_user(last_ts, text))
+            elif ptype == "assistant":
+                record = meta_assistant(last_ts, extract_usage(entry)["model"])
+                # Reasoning signatures and placeholder text are not assistant output.
+                text = str_field(payload, "content")
+                if str_field(payload, "operationType") != "Reasoning" and text.strip():
+                    record["message"]["content"].append({"type": "text", "text": text})
+                records.append(record)
+            elif ptype == "tool_call":
+                block = tool(
+                    str_field(payload, "toolName"), str_field(payload, "toolCallId"), dict_field(payload, "args")
+                )
+                if block:
+                    record = meta_assistant(last_ts)
+                    record["type"] = "tool_calls"
+                    record["message"]["content"].append(block)
+                    records.append(record)
+            elif ptype == "tool_result":
+                records.append(
+                    meta_tool_result(
+                        last_ts,
+                        tool_names.get(str_field(payload, "toolCallId"), "unknown"),
+                        payload.get("success") is False,
+                        str_field(payload, "content"),
+                    )
+                )
+            if last_ts:
+                records.append(meta_time(last_ts))
+            continue
+
+        data = dict_field(entry, "data")
+        epoch = dict_field(data, "meta").get("timestamp")
+        if isinstance(epoch, int | float) and not isinstance(epoch, bool):
+            converted = _epoch_to_clickhouse(epoch)
+            if converted:
+                last_ts = converted.replace(" ", "T") + "Z"
+        kind = str_field(entry, "kind")
+        content = list_field(data, "content")
+        if kind == "Prompt":
+            text = "\n".join(
+                str_field(item, "data") for item in content if isinstance(item, dict) and item.get("kind") == "text"
+            )
+            if text.strip():
+                records.append(meta_user(last_ts, text))
+        elif kind == "AssistantMessage":
+            record = meta_assistant(last_ts, extract_usage(entry)["model"])
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                value = item.get("data")
+                if item.get("kind") == "text":
+                    text = (
+                        value if isinstance(value, str) else str_field(value, "text") if isinstance(value, dict) else ""
+                    )
+                    if text.strip():
+                        record["message"]["content"].append({"type": "text", "text": text})
+                elif item.get("kind") == "toolUse" and isinstance(value, dict):
+                    block = tool(str_field(value, "name"), str_field(value, "toolUseId"), dict_field(value, "input"))
+                    if block:
+                        record["message"]["content"].append(block)
+            records.append(record)
+        elif kind == "ToolResults":
+            for item in content:
+                if not isinstance(item, dict) or item.get("kind") != "toolResult":
+                    continue
+                result = dict_field(item, "data")
+                records.append(
+                    meta_tool_result(
+                        last_ts,
+                        tool_names.get(str_field(result, "toolUseId"), "unknown"),
+                        result.get("status") == "error",
+                        _extract_result_text(list_field(result, "content")),
+                    )
+                )
+        if last_ts and kind in {"Prompt", "AssistantMessage", "ToolResults"}:
+            records.append(meta_time(last_ts))
+    return records
+
+
+def transcript_rows(rows: list[dict]) -> list[dict]:
+    """Expand mixed text/tool records into separate transcript lines, using the same normalization as metrics."""
+    entries = [entry for row in rows if (entry := load_line(row.get("raw_line", ""))) is not None]
+    formatted: list[dict] = []
+    for record in meta_records(entries):
+        message = dict_field(record, "message")
+        role = str_field(message, "role")
+        if role == "user":
+            formatted.append({"event_type": "user_prompt", "raw_line": record})
+        elif role == "assistant":
+            content = list_field(message, "content")
+            if any(block.get("type") == "text" for block in content):
+                formatted.append({"event_type": "assistant_text", "raw_line": record})
+            for block in content:
+                if block.get("type") == "toolCall":
+                    formatted.append(
+                        {
+                            "event_type": "tool_call",
+                            "tool_name": block["name"],
+                            "raw_line": {"message": {"content": [block]}},
+                        }
+                    )
+        elif role == "toolResult":
+            formatted.append(
+                {
+                    "event_type": "tool_result",
+                    "tool_name": str_field(message, "toolName"),
+                    "raw_line": {"isError": message.get("isError", False), "content": list_field(message, "content")},
+                }
+            )
+    return formatted
+
+
+# ---------------------------------------------------------------------------
 # Write-path helpers - called by session_ingest's harness dispatch
 # ---------------------------------------------------------------------------
+
+
+def normalize_model_id(value: object) -> str:
+    """Remove Kiro's transport prefix without resolving or guessing `auto`."""
+    if not isinstance(value, str):
+        return ""
+    return value.strip().removeprefix("qdev::")
 
 
 def extract_usage(parsed: dict) -> dict:
     """Extract Kiro's model from CLI assistant blocks (no token counts in JSONL).
 
     The Claude Code usage extractor reads ``message.model``; Kiro's CLI puts
-    ``modelId`` inside each content block's ``data`` instead. IDE records may
-    carry a model on the payload, but must never be interpreted as Claude rows.
+    ``modelId`` inside each content block's ``data`` instead. V3 reasoning records
+    carry ``reasoningModelId``; older IDE records may carry ``modelId``.
+    Neither is interpreted as Claude usage or resolved from ``auto``.
     """
     model = ""
     if parsed.get("kind") == "AssistantMessage":
@@ -482,11 +687,11 @@ def extract_usage(parsed: dict) -> dict:
                 continue
             block = item.get("data")
             if isinstance(block, dict):
-                model = str_field(block, "modelId") or model
+                model = normalize_model_id(block.get("modelId")) or model
     else:
         payload = parsed.get("payload")
         if isinstance(payload, dict) and payload.get("type") == "assistant":
-            model = str_field(payload, "modelId")
+            model = normalize_model_id(payload.get("reasoningModelId")) or normalize_model_id(payload.get("modelId"))
     return {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -509,17 +714,40 @@ def extra_ingest_rows(
     agent_version: str | None,
     harness: str,
     total_credits: float | None,
+    session_model: str | None = None,
 ) -> list[dict]:
     """Return Kiro-specific extra rows to write after the main ingest loop.
 
     Stores a single ``kiro_credits`` row at line_offset=0xFFFFFFFF so the
     sessions list query can aggregate ``sum(credits)`` per session.
     ReplacingMergeTree deduplication makes repeated inserts idempotent.
-    Returns an empty list when no credits are available.
+    Companion models use a separate reserved offset and are not rendered or
+    counted as source lines. Observed transcript models always take priority.
+    Returns an empty list when neither credits nor model metadata are available.
     """
+    rows: list[dict] = []
+    model = normalize_model_id(session_model)
+    if model:
+        rows.append(
+            {
+                "session_id": session_id,
+                "project_id": project_id,
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "agent_version": agent_version,
+                "harness": harness,
+                "line_offset": 0xFFFFFFFE,
+                "event_type": "kiro_session_model",
+                "timestamp": "1970-01-01 00:00:00.000",
+                "model": model,
+                "rendered": 0,
+                "raw_line": json.dumps({"kind": "KiroSessionModel", "data": {"modelId": model}}),
+            }
+        )
     if total_credits is None or total_credits <= 0:
-        return []
+        return rows
     return [
+        *rows,
         {
             "session_id": session_id,
             "project_id": project_id,
@@ -540,5 +768,5 @@ def extra_ingest_rows(
             "content_length": 0,
             "raw_line": json.dumps({"kind": "KiroCredits", "credits": total_credits}),
             "credits": total_credits,
-        }
+        },
     ]

@@ -20,7 +20,7 @@ Agents are the primary entity. Each agent bundles 5 component types: MCP servers
 
 ## harness capability support
 
-Ten harnesses are registered in `packages/observal-shared/observal_shared/harness_registry.py`, and all ten are fully supported: each has a CLI adapter (scanning, `doctor patch` and `cleanup` for hooks), a server adapter (config generation), a session parser (so `observal reconcile` works), and telemetry delivery. The only gaps are per-capability and listed below. Verify against the registry before relying on this table.
+Ten harnesses are registered in `packages/observal-shared/observal_shared/harness_registry.py`. Each has CLI and server adapters and resolves a session parser. The table lists registered capabilities, delegation facts and component-evidence coverage; native activation and tool-version requirements are documented in the integration guides. Antigravity is on the compatibility hold described in `docs/integrations/antigravity.md`; its hook cleanup currently uses the base no-op. Verify registry declarations and adapter implementations when changing support.
 
 | Harness | Capabilities | Session parser | Hook install | Headless delegation | Component insights |
 |---|---|---|---|---|---|
@@ -39,7 +39,7 @@ Known gaps, not tiers:
 - **Component insights** count MCP invocations, skill evidence and hook evidence only where an extractor is proven for the harness (`invocation_extractor`, `skill_evidence_extractor`, `hook_evidence_extractor` in the registry). Today that is Claude Code and Pi. Everywhere else coverage reports unsupported, never zero use. See "Component Insights" in `docs/adding-a-harness.md`.
 - **Delegation runs** need the `headless_run` fact. Copilot (VS Code) and Goose do not have it, so they cannot run a delegated agent as a child process.
 - **Cursor has no `skills` capability.**
-- **Scan depth varies.** `scan_home`/`scan_project` return MCPs, skills, hooks and agents for Antigravity, Claude Code, Copilot CLI, Goose and Kiro; MCPs and skills for Pi; MCPs only for Codex, Copilot, Cursor and OpenCode. Do not present a scan of those four as a complete component inventory.
+- **Legacy scan coverage is scope-specific.** OpenCode scans MCPs, skills, hooks and agents in home and project scope. Claude Code and Kiro home scans cover those four categories; their project scans cover MCPs. Antigravity home scans cover all four, and project scans cover MCPs and skills. Copilot CLI home scans cover MCPs, skills and hooks, and project scans also cover agents. Goose home scans cover all four; project scans cover skills, hooks and agents (MCP config is user-level). Pi scans MCPs and skills in both scopes; Codex, Copilot and Cursor legacy scans cover MCPs. Bounded `discover_home()` / `discover_project()` power the separate read-only `scan --inventory` path.
 - **Playwright coverage** is harness-specific only for Kiro (9 specs). The other harnesses are covered by pytest in `tests/`.
 - Cursor and Pi do not have a `harness_specs/` module: Cursor writes its hooks from the adapter, and Pi runs registry hooks and telemetry through the bundled extension (see `docs/integrations/pi.md`).
 
@@ -113,17 +113,17 @@ The codebase follows a strict adapter pattern for harness-specific logic. This i
 
 **No if/elif chains for harness logic.** If you need harness-specific behavior, it goes in the adapter. The orchestrators (`cmd_scan.py`, `agent_builder.py`, `cmd_doctor.py`) call adapters via the registry, never with conditionals.
 
-**Capability gating.** Each adapter method maps to a capability via `METHOD_FEATURE_MAP` in `observal_cli/harness/protocol.py`. The registry entry's `capabilities` set (`hooks`, `mcp_servers`, `skills`, `prompts`) decides what is allowed; `BaseAdapter` raises `NotSupportedError` when the capability is absent. This means stubs are safe: they exist but can't be called for unsupported operations.
+**Capability gating.** `METHOD_FEATURE_MAP` in `observal_cli/harness/protocol.py` maps hook generation/detection/spec methods to `hooks` and legacy scan methods to `mcp_servers`. `BaseAdapter` checks these mapped methods before invoking overrides. Other operations enforce their own capability or runtime-fact checks; inherited no-op methods are not evidence that an operation is implemented. The registry capability vocabulary is `hooks`, `mcp_servers`, `skills`, `prompts`.
 
 **Headless runs are a verified fact.** The registry's `headless_run` runtime fact says a harness CLI can run one prompt non-interactively; the CLI adapter's `headless_command` builds the argv and `parse_headless_output` reads the answer. Delegation uses only harnesses with the fact set.
 
-**Session parsers are separate from adapters.** They live in `services/session_parsers/` (server-side) and handle converting raw JSONL into normalized trace events. All nine harnesses resolve a parser; Copilot reuses the Copilot CLI parser.
+**Session parsers are separate from adapters.** They live in `services/session_parsers/` (server-side) and handle converting raw JSONL into normalized trace events. All ten harnesses resolve one of nine parsers; Copilot reuses the Copilot CLI parser.
 
 ### What a harness needs
 
-Every registered harness provides all of:
+A complete harness integration includes:
 - A registry entry with correct paths, capabilities and runtime facts
-- A CLI adapter that scans local config and installs and removes its telemetry hooks. Scan depth varies, see below.
+- A CLI adapter with scope-aware scanning/inventory and the native hook installation and cleanup workflow. Coverage is listed above; implement and test each operation explicitly.
 - A server adapter that generates config files
 - A session parser resolved from the registry's `session_parser` key (enables `observal reconcile`)
 - pytest coverage in `tests/`

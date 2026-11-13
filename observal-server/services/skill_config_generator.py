@@ -48,8 +48,8 @@ def _generate_skill(skill_source, harness: str, scope: str = "project", *, name:
     """Generate an harness-specific skill file dict with path and content.
 
     skill_source can be a SkillListing or SkillVersion (both have skill_md_content).
-    Returns None for monolithic harnesses (gemini, codex, copilot) that inline
-    skills into their rules markdown.
+    Returns None when the registry has no skill paths for the requested harness.
+    Install callers enforce capability support separately.
     """
     name_attr = name or getattr(skill_source, "name", None)
     # Direct callers may pass a SkillVersion. Installs pass an explicit

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Session JSONL parsers -- READ path (raw ClickHouse rows -> frontend events).
@@ -32,7 +33,9 @@ from .codex import parse_rows as _parse_codex
 from .copilot_cli import parse_rows as _parse_copilot_cli
 from .cursor import parse_rows as _parse_cursor
 from .goose import parse_rows as _parse_goose
+from .kiro import meta_records as _kiro_meta
 from .kiro import parse_rows as _parse_kiro
+from .kiro import transcript_rows as _kiro_transcript
 from .opencode import parse_rows as _parse_opencode
 from .pi import parse_rows as _parse_pi
 
@@ -75,12 +78,13 @@ def parse_raw_events(rows: list[dict]) -> list[dict]:
 
 # Maps session_parser ID -> converter from parsed transcript lines to the
 # Pi-style records the insight meta extractor reads. Pi lines already have that
-# shape and the extractor reads Kiro lines itself; other formats are not yet
+# shape; other formats are not yet
 # converted, so their sessions report only a time range.
 _MetaFn = Callable[[list[dict]], list[dict]]
 _META_RECORDS: dict[str, _MetaFn] = {
     "claude-code": _claude_code_meta,
     "codex": _codex_meta,
+    "kiro": _kiro_meta,
 }
 
 
@@ -91,3 +95,15 @@ def meta_records(harness: str, entries: list[dict]) -> list[dict]:
     parser_id = HARNESS_REGISTRY[harness]["session_parser"]  # KeyError = unknown harness
     convert = _META_RECORDS.get(parser_id or "")
     return convert(entries) if convert else entries
+
+
+_TRANSCRIPT_ROWS: dict[str, _MetaFn] = {"kiro": _kiro_transcript}
+
+
+def transcript_rows(harness: str, rows: list[dict]) -> list[dict]:
+    """Expand native transcript records when a parser needs multi-event formatting."""
+    from observal_shared.harness_registry import HARNESS_REGISTRY
+
+    parser_id = HARNESS_REGISTRY[harness]["session_parser"]
+    convert = _TRANSCRIPT_ROWS.get(parser_id or "")
+    return convert(rows) if convert else rows

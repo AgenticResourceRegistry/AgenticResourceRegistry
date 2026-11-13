@@ -1,4 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """CLI commands for Agent and evidence-backed component Insights reports."""
@@ -440,6 +442,7 @@ def insights_show(
             if component
             else _resolve_report_for_show(target, report_ref)
         )
+    _fail_if_discovery_not_requested(data, section)
     if data.get("subject_type") == "component" and section:
         narrative = data.get("narrative") or {}
         sections = {"metrics": data.get("metrics"), "coverage": data.get("coverage")}
@@ -616,6 +619,7 @@ def insights_show(
         "version_comparison",
         "regression_detection",
         "on_the_horizon",
+        "discovery",
         "fun_ending",
     ]
     note_rendered = False
@@ -641,6 +645,9 @@ def _render_component_section(name: str, content: object) -> None:
         return
     if name == "outcomes" and isinstance(content, dict):
         _render_outcomes(content)
+        return
+    if name == "discovery" and isinstance(content, dict):
+        _render_discovery_inline("ARD discovery suggestions", content)
         return
     if isinstance(content, str):
         rprint(f"  {esc(content)}")
@@ -774,6 +781,69 @@ def _render_analysis(analysis: dict, attention: list | None = None) -> None:
             rprint(f"    [dim]Based on: {esc(based_on)}[/dim]")
 
 
+def _discovery_lines(discovery: dict) -> list[str]:
+    """Description advice for the listing itself. Example searches are illustrative, never recorded queries."""
+    state = discovery.get("state")
+    if state == "unavailable":
+        return ["[yellow]The suggestions could not be written (the model failed); generate the report again.[/yellow]"]
+    if state == "unknown":
+        return ["[dim]No suggestion passed the accuracy checks, so none are shown.[/dim]"]
+    suggestions = discovery.get("suggestions") or []
+    if state != "assessed" or not suggestions:
+        return ["[dim]No supported description edits were identified. This does not measure search traffic.[/dim]"]
+    scope = "the selected release" if discovery.get("metadata_version_scope") == "selected" else "the current listing"
+    version = f" (v{esc(str(discovery['listing_version']))})" if discovery.get("listing_version") else ""
+    lines = [
+        f"[dim]Illustrative searches, not recorded queries. Advice uses {scope}{version}. "
+        "Review every suggestion for accuracy before editing; no ranking is guaranteed.[/dim]"
+    ]
+    for item in suggestions:
+        lines += [
+            f"[bold]Example search[/bold]: {esc(str(item.get('illustrative_query', '')))}",
+            f"  {esc(str(item.get('rationale', '')))}",
+            f"  [bold]Suggested description[/bold]: {esc(str(item.get('suggested_description', '')))}",
+            f"  [dim]ARD relevance for this example: {item.get('relevance_before')} → {item.get('relevance_after')} "
+            "(not a search position)[/dim]",
+        ]
+    return lines
+
+
+def _render_discovery(title: str, discovery: dict) -> None:
+    """Agent reports: a panel, like every other narrative section."""
+    console.print(
+        Panel(
+            "\n".join(_discovery_lines(discovery)),
+            title=f"[bold]{esc(title)}[/bold]",
+            border_style="blue",
+            expand=False,
+        )
+    )
+
+
+def _render_discovery_inline(title: str, discovery: dict) -> None:
+    """Component reports print their sections inline, so this one does too."""
+    rprint(f"  [bold]{esc(title)}[/bold]")
+    for line in _discovery_lines(discovery):
+        rprint(f"  {line}")
+
+
+def _fail_if_discovery_not_requested(data: dict, section: str | None) -> None:
+    """A report generated without --discovery has no such section; say so rather than "unknown section"."""
+    narrative = data.get("narrative")
+    if (
+        section == "discovery"
+        and not data.get("discovery_optimization_requested")
+        and not (isinstance(narrative, dict) and "discovery" in narrative)
+    ):
+        fail(
+            ErrorCategory.VALIDATION,
+            "This report was generated without ARD discovery suggestions.",
+            operation="Show insight report",
+            resource="insight report section",
+            remediation="Generate a new report with --discovery to include them.",
+        )
+
+
 def _render_interpretation(narrative: dict) -> None:
     """Outcomes, attention items and the model's reading, in the order an owner wants them."""
     if not any(key in narrative for key in ("outcomes", "attention", "analysis")):
@@ -787,6 +857,8 @@ def _render_interpretation(narrative: dict) -> None:
     if narrative.get("outcomes"):
         rprint("  [bold]Sessions with and without it[/bold]")
         _render_outcomes(narrative["outcomes"])
+    if isinstance(narrative.get("discovery"), dict):
+        _render_discovery_inline("ARD discovery suggestions", narrative["discovery"])
 
 
 def _skill_count(metrics: dict, key: str, measured: bool, partial: bool) -> str:
@@ -935,6 +1007,7 @@ _SECTION_TITLES = {
     "regression_detection": "📈 Regression Detection",
     "on_the_horizon": "🔮 On the Horizon",
     "fun_ending": "🎉 Fun Moment",
+    "discovery": "ARD discovery suggestions",
 }
 
 _HEALTH_COLORS = {"healthy": "green", "mixed": "yellow", "concerning": "red"}
@@ -1269,6 +1342,7 @@ _RENDERERS = {
     "regression_detection": _render_regression,
     "on_the_horizon": _render_horizon,
     "fun_ending": _render_fun_ending,
+    "discovery": _render_discovery,
 }
 
 
@@ -1281,6 +1355,9 @@ def insights_generate(
     output: OutputMode = typer.Option("table", "--output", "-o"),
     wait: bool = typer.Option(False, "--wait", help="Poll until the report completes"),
     component: tuple[str, str] | None = typer.Option(None, "--component", help="Component type and ref"),
+    discovery: bool = typer.Option(
+        False, "--discovery", help="Also write ARD description suggestions (uses the Insights model)"
+    ),
 ):
     """Trigger generation of a new insight report.
 
@@ -1289,8 +1366,11 @@ def insights_generate(
         observal ops insights generate my-agent
 
         observal ops insights generate my-agent --period 30
+
+        observal ops insights generate --component skill alice/review --discovery --wait
     """
     component = component if isinstance(component, tuple) else None
+    discovery = discovery is True  # a direct call leaves an unpassed option as its truthy OptionInfo
     if not component and not agent_id:
         raise typer.BadParameter("Provide an agent or --component")
     if (component and agent_id) or (not component and not agent_id):
@@ -1329,6 +1409,8 @@ def insights_generate(
         resolved = _resolve_agent_id(agent_id) if not component else ""
         component_path = _component_path(component) if component else ""
         body = {"period_days": period_days}
+        if discovery:
+            body["include_discovery_optimization"] = True
         if component_version:
             body["component_version_id"] = _component_version_id(component, component_version)
         if agent_version:

@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Gokulkrishnan <gokulkri247@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal registry prompt"
 ---
@@ -68,7 +69,7 @@ Only approved source listings and versions can be forked. A fork has its own nam
 observal registry prompt render acme/review --var code=main.py --output json
 ```
 
-Every variable must use `key=value` syntax with a non-empty key. JSON returns the direct server result. Human output prints the rendered prompt as literal text.
+Every variable must use `key=value` syntax with a non-empty key. JSON returns the direct server result. Human output prints the rendered prompt as literal text. Missing inputs can leave literal placeholders; rendering is not a model execution or proof all variables were filled. This command has no explicit version-selector option in this revision, so inspect its selected template before claiming reproducible standalone rendering. See [Publish and render a prompt](/guides/publish-a-prompt).
 
 ## Edit
 

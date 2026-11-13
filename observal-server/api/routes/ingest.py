@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Session JSONL ingest endpoint."""
@@ -90,6 +91,8 @@ class SessionIngestRequest(BaseModel):
     hashed_line_count: int | None = Field(None, ge=0, le=MAX_SESSION_TOTAL_LINES)
     # Kiro-specific: total credits consumed this session
     total_credits: float | None = Field(None, ge=0)
+    # Kiro companion model, used only when transcript records have no model.
+    session_model: str | None = Field(None, max_length=MAX_SHORT_STRING_LENGTH)
     # Claude Code subagent attribution: set when this session is a subagent
     parent_session_id: str | None = Field(None, max_length=MAX_SHORT_STRING_LENGTH)
     # Discovery resources the CLI's capability lock attributes to this session
@@ -186,6 +189,7 @@ async def ingest_session(
             start_offset=req.start_offset,
             end_byte_offsets=req.end_byte_offsets,
             total_credits=req.total_credits,
+            session_model=req.session_model,
             parent_session_id=req.parent_session_id,
         )
     except SessionRecordConflictError as exc:

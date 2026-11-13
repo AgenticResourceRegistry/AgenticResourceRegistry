@@ -46,6 +46,7 @@ import {
 } from "./settings/settings-ui";
 import { MigrateDialog } from "./dashboard/components/migrate-dialog";
 import { useHelp } from "@/components/wiki/help-context";
+import { DEFAULT_REGISTRY_NAME } from "@/components/registry/registry-mark";
 import { useAdminSettings, useAdminSettingsSchema, useRestartApi, useRestartStatus, useSystemWarnings } from "@/hooks/use-api";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { useHarnesses } from "@/hooks/use-harnesses";
@@ -187,9 +188,11 @@ const DEDICATED_SECTIONS: { area: string; id: string; title: string; description
 		["retention.max_trace_count", "Max trace count (optional)", ""],
 	] },
 	{ area: "data", id: "usage", title: "Usage reporting", rows: [
-		["usage_ping.enabled", "Share aggregate product usage with Observal", "Sends aggregate reports to usage.observal.io on the schedule you choose."],
+		["usage_ping.enabled", "Share aggregate product usage with Agentic Resource Registry", "Sends aggregate reports to usage.observal.io on the schedule you choose."],
+		["usage_ping.include_admin_emails", "Include administrator email addresses", "Sends super administrator email addresses with each report."],
 		["usage_ping.company_name", "Company name", ""],
 		["usage_ping.frequency", "Reporting frequency", ""],
+		["usage_ping.contact", "Contact person", "Share someone the maintainers can reach about this deployment."],
 	] },
 	{ area: "data", id: "migration", title: "Data Migration", rows: [
 		["migration", "Export, import, and validate instance data", "Move registry data and telemetry between Observal instances."],
@@ -980,7 +983,7 @@ export default function SettingsPage() {
 								id={`${rowDomId("branding.app_name")}-control`}
 								value={appNameDraft}
 								onChange={(event) => setAppNameOverride(event.target.value)}
-								placeholder="Observal"
+								placeholder={DEFAULT_REGISTRY_NAME}
 								autoComplete="off"
 								maxLength={30}
 								className="min-h-9 py-2"
@@ -994,7 +997,7 @@ export default function SettingsPage() {
 							{wordmarkPreview ? (
 								<img src={wordmarkPreview} alt="" width={140} height={16} className="h-4 max-w-35 object-contain object-left" />
 							) : (
-								<span className="max-w-48 truncate text-base font-semibold tracking-tight text-sidebar-foreground">{appNameDraft.trim() || "Observal"}</span>
+								<span className="max-w-48 truncate text-base font-semibold tracking-tight text-sidebar-foreground">{appNameDraft.trim() || DEFAULT_REGISTRY_NAME}</span>
 							)}
 						</div>
 					</SettingRow>

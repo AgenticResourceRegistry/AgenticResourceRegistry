@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Development Guide"
 ---
@@ -57,7 +58,7 @@ title: "Development Guide"
   * [Reinstalling after changes](/DEVELOPMENT_GUIDE#reinstalling-after-changes)
 * [Harness Recommendations](/DEVELOPMENT_GUIDE#harness-recommendations)
   * [VS Code](/DEVELOPMENT_GUIDE#vs-code)
-  * [PyCharm / IntelliJ](/DEVELOPMENT_GUIDE#pycharm--intellij)
+  * [PyCharm / IntelliJ](/DEVELOPMENT_GUIDE#pycharm-/-intellij)
 * [Pre-commit Hooks](/DEVELOPMENT_GUIDE#pre-commit-hooks)
 * [Pull Request Checklist](/DEVELOPMENT_GUIDE#pull-request-checklist)
 * [Getting Help](/DEVELOPMENT_GUIDE#getting-help)
@@ -640,16 +641,16 @@ git commit --no-verify -m "your message"
 
 Before opening a PR:
 
-* [ ] `make test` passes locally
-* [ ] `make lint` passes with no errors
-* [ ] Branch is rebased on the latest `main`
-* [ ] Commits follow [Conventional Commits](https://www.conventionalcommits.org/) format
-* [ ] All commits are signed off with SPDX headers (pre-commit hook handles this automatically)
-* [ ] PR template is filled in completely and reviewed by the accountable human contributor
-* [ ] CHANGELOG.md updated under `[Unreleased]` for user-facing changes
-* [ ] Frontend changes include screenshots in the PR body
-* [ ] AI-assisted contributions labelled with tool name and version (see [AI Policy](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/AI_POLICY.md))
-* [ ] No unattended agent submissions without meaningful human direction and review (see [AI Policy](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/AI_POLICY.md))
+* `make test` passes locally
+* `make lint` passes with no errors
+* Branch is rebased on the latest `main`
+* Commits follow [Conventional Commits](https://www.conventionalcommits.org/) format
+* All commits are signed off with SPDX headers (pre-commit hook handles this automatically)
+* PR template is filled in completely and reviewed by the accountable human contributor
+* CHANGELOG.md updated under `[Unreleased]` for user-facing changes
+* Frontend changes include screenshots in the PR body
+* AI-assisted contributions labelled with tool name and version (see [AI Policy](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/AI_POLICY.md))
+* No unattended agent submissions without meaningful human direction and review (see [AI Policy](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/AI_POLICY.md))
 
 ***
 

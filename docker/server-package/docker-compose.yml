@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Yash Gadgil <yashgadgil08@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # Standalone Observal deployment — uses pre-built images from GHCR.
@@ -40,6 +41,7 @@ services:
       - "${OBSERVAL_SECRET_GID:-1000}"
     environment:
       - JWT_KEY_DIR=/data/keys
+      - MIGRATION_ARTIFACT_ROOT=/data/migration_artifacts
       - SKIP_DDL_ON_STARTUP=true
       - DEMO_SUPER_ADMIN_EMAIL=${DEMO_SUPER_ADMIN_EMAIL:-super@demo.example}
       - DEMO_ADMIN_EMAIL=${DEMO_ADMIN_EMAIL:-admin@demo.example}
@@ -157,7 +159,10 @@ services:
       - ./.env
     group_add:
       - "${OBSERVAL_SECRET_GID:-1000}"
+    environment:
+      - MIGRATION_ARTIFACT_ROOT=/data/migration_artifacts
     volumes:
+      - apidata:/data
       - ./secrets:/run/secrets:ro
     depends_on:
       observal-init:

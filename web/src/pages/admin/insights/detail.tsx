@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
+// SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
@@ -38,10 +39,15 @@ import {
 	Copy,
 	Check,
 	Brain,
+	ChevronDown,
 } from "lucide-react";
 import { useInsightReport } from "@/hooks/use-api";
 import { useApplyInsightSuggestions } from "@/hooks/use-insights-api";
+import { DiscoveryOptimizationSection } from "@/components/insights/discovery-optimization";
+import { KeyPointsSummary, RichText, SectionToggles } from "@/components/insights/report-summary";
+import { useReportSections } from "@/lib/insight-key-points";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { PageHeader } from "@/components/layouts/page-header";
 import { ErrorState } from "@/components/shared/error-state";
 import { insights } from "@/lib/api";
@@ -191,7 +197,7 @@ function AtAGlance({ data }: { data: unknown }) {
 									{label}
 								</h4>
 								<p className="text-sm text-foreground/80 leading-relaxed">
-									{obj[key]}
+									<RichText text={obj[key]} />
 								</p>
 							</div>
 						),
@@ -237,7 +243,7 @@ function UsagePatterns({ data }: { data: unknown }) {
 			<div className="px-5 py-4 space-y-4">
 				{narrative && (
 					<p className="text-sm leading-relaxed text-foreground/80">
-						{narrative}
+						<RichText text={narrative} />
 					</p>
 				)}
 
@@ -347,7 +353,7 @@ function StrengthsSection({ data }: { data: unknown }) {
 				</h3>
 			</div>
 			<div className="px-5 py-4 space-y-3">
-				{intro && <p className="text-sm text-muted-foreground">{intro}</p>}
+				{intro && <p className="text-sm text-muted-foreground"><RichText text={intro} /></p>}
 				<div className="space-y-3">
 					{strengths.map((s, i) => (
 						<div
@@ -357,7 +363,7 @@ function StrengthsSection({ data }: { data: unknown }) {
 							<div className="font-medium text-sm text-success mb-1">
 								{s.title}
 							</div>
-							<div className="text-sm text-foreground/70">{s.description}</div>
+							<div className="text-sm text-foreground/70"><RichText text={s.description} /></div>
 						</div>
 					))}
 				</div>
@@ -405,7 +411,7 @@ function FrictionSection({ data }: { data: unknown }) {
 				</h3>
 			</div>
 			<div className="px-5 py-4 space-y-3">
-				{intro && <p className="text-sm text-muted-foreground">{intro}</p>}
+				{intro && <p className="text-sm text-muted-foreground"><RichText text={intro} /></p>}
 				<div className="space-y-3">
 					{categories.map((cat, i) => (
 						<div
@@ -429,7 +435,7 @@ function FrictionSection({ data }: { data: unknown }) {
 								</span>
 							</div>
 							<div className="text-sm text-foreground/70 mb-1">
-								{cat.description}
+								<RichText text={cat.description} />
 							</div>
 							{cat.evidence && (
 								<div className="text-xs text-muted-foreground font-[family-name:var(--font-mono)] mt-2 p-2 bg-muted/30 rounded">
@@ -446,12 +452,18 @@ function FrictionSection({ data }: { data: unknown }) {
 
 // ── Copy Button helper ─────────────────────────────────────────────────
 
-function CopyButton({ text, className }: { text: string; className?: string }) {
+function CopyButton({ text, className, iconOnly }: { text: string; className?: string; iconOnly?: boolean }) {
 	const [copied, setCopied] = React.useState(false);
 	return (
 		<button
 			type="button"
-			className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted/50 text-muted-foreground transition-colors ${className || ""}`}
+			aria-label={copied ? "Copied" : "Copy"}
+			title={copied ? "Copied" : "Copy"}
+			className={
+				iconOnly
+					? `inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground ${className || ""}`
+					: `inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted/50 text-muted-foreground transition-colors ${className || ""}`
+			}
 			onClick={(event) => {
 				event.stopPropagation();
 				navigator.clipboard.writeText(text).then(() => {
@@ -460,8 +472,8 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
 				}).catch(() => {});
 			}}
 		>
-			{copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-			{copied ? "Copied" : "Copy"}
+			{copied ? <Check className={iconOnly ? "h-4 w-4 text-success" : "h-3 w-3"} /> : <Copy className={iconOnly ? "h-4 w-4" : "h-3 w-3"} />}
+			{!iconOnly && (copied ? "Copied" : "Copy")}
 		</button>
 	);
 }
@@ -592,7 +604,7 @@ function ProjectAreas({ data }: { data: unknown }) {
 								{area.sessions} sessions
 							</span>
 						</div>
-						<p className="text-sm text-foreground/60">{area.description}</p>
+						<p className="text-sm text-foreground/60"><RichText text={area.description} /></p>
 					</div>
 				))}
 			</div>
@@ -691,22 +703,229 @@ function RegistryMatchNote({ summary }: { summary?: RegistryMatchSummary }) {
 	);
 }
 
+// ── Suggestion cards ─────────────────────────────────────────────────────
+
+function SuggestionGroup({ title, hint, note, children }: { title: string; hint?: string; note?: React.ReactNode; children: React.ReactNode }) {
+	return (
+		<section className="space-y-3">
+			<div className="space-y-1">
+				<h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h4>
+				{hint && <p className="text-sm text-muted-foreground">{hint}</p>}
+				{note}
+			</div>
+			<div className="space-y-2">{children}</div>
+		</section>
+	);
+}
+
+/** Text the reader pastes somewhere: a prompt or an example file. */
+function SuggestionSnippet({ text }: { text: string }) {
+	return (
+		<pre className="whitespace-pre-wrap break-words rounded-md bg-muted/40 p-3 font-[family-name:var(--font-mono)] text-xs leading-5 text-foreground/80">
+			{text}
+		</pre>
+	);
+}
+
+/**
+ * One suggestion: the change itself as the headline and the reason under it, with the checkbox and the copy
+ * button in fixed columns so every card lines up. Labels like confidence and risk are left out on purpose; the
+ * reason says more than either.
+ */
+function SuggestionCard({
+	selectable,
+	selected,
+	onToggle,
+	kind,
+	highlightKind,
+	title,
+	reason,
+	copyText,
+	children,
+}: {
+	selectable: boolean;
+	selected: boolean;
+	onToggle: () => void;
+	kind?: string;
+	highlightKind?: boolean;
+	title: string;
+	reason?: string;
+	copyText?: string;
+	children?: React.ReactNode;
+}) {
+	const [open, setOpen] = React.useState(false);
+	const hasMore = Boolean(reason) || React.Children.toArray(children).some(Boolean);
+	const columns = selectable ? "cursor-pointer grid-cols-[1rem_minmax(0,1fr)_2rem]" : "grid-cols-[minmax(0,1fr)_2rem]";
+	const tone = !selectable ? "border-border bg-card" : selected ? "border-primary/40 bg-primary/5" : "border-border opacity-55";
+	return (
+		<div className={`grid items-start gap-x-3 rounded-md border px-4 py-3.5 transition-colors ${columns} ${tone}`} onClick={selectable ? onToggle : undefined}>
+			{selectable && (
+				<Checkbox
+					className="mt-1"
+					checked={selected}
+					aria-label={`Apply: ${title}`}
+					onClick={(event) => event.stopPropagation()}
+					onCheckedChange={onToggle}
+				/>
+			)}
+			<div className="min-w-0 space-y-1.5">
+				{kind && (
+					<p className={`text-xs font-medium ${highlightKind ? "text-primary-accent" : "text-muted-foreground"}`}>{kind}</p>
+				)}
+				<p className="text-sm font-semibold leading-6 text-foreground">
+					<RichText text={title} />
+				</p>
+				{/* Only the change itself shows by default; the reason and any snippet open on demand. */}
+				{hasMore && (
+					<button
+						type="button"
+						aria-expanded={open}
+						onClick={(event) => {
+							event.stopPropagation();
+							setOpen((value) => !value);
+						}}
+						className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+					>
+						{open ? "Hide details" : "Details"}
+						<ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
+					</button>
+				)}
+				{open && (
+					<div className="space-y-2 border-l-2 border-border pl-3 pt-1" onClick={(event) => event.stopPropagation()}>
+						{reason && (
+							<p className="text-sm leading-6 text-foreground/75">
+								<RichText text={reason} />
+							</p>
+						)}
+						{children}
+					</div>
+				)}
+			</div>
+			{copyText ? <CopyButton text={copyText} iconOnly /> : <span aria-hidden />}
+		</div>
+	);
+}
+
+type SuggestionKind = "configs" | "features" | "patterns";
+type SuggestionSets = Record<SuggestionKind, Set<number>>;
+
+function suggestionCounts(data: unknown): Record<SuggestionKind, number> | null {
+	if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+	const obj = data as Record<string, unknown>;
+	const len = (value: unknown) => (Array.isArray(value) ? value.length : 0);
+	const counts = { configs: len(obj.config_additions), features: len(obj.features_to_try), patterns: len(obj.usage_patterns) };
+	return counts.configs + counts.features + counts.patterns > 0 ? counts : null;
+}
+
+const emptySelection = (): SuggestionSets => ({ configs: new Set(), features: new Set(), patterns: new Set() });
+
+/** Which suggestions are ticked. Lives on the page so the sticky top bar can apply them from anywhere. */
+function useSuggestionSelection(report: InsightReport | undefined) {
+	const counts = suggestionCounts(report?.narrative?.suggestions);
+	const configs = counts?.configs ?? 0;
+	const features = counts?.features ?? 0;
+	const patterns = counts?.patterns ?? 0;
+	const everything = React.useCallback(
+		(): SuggestionSets => ({
+			configs: new Set(Array.from({ length: configs }, (_, i) => i)),
+			features: new Set(Array.from({ length: features }, (_, i) => i)),
+			patterns: new Set(Array.from({ length: patterns }, (_, i) => i)),
+		}),
+		[configs, features, patterns],
+	);
+	const [selected, setSelected] = React.useState<SuggestionSets>(emptySelection);
+	// Nothing starts ticked, again whenever a different report loads: the reader opts in to each change.
+	React.useEffect(() => setSelected(emptySelection()), [report?.id]);
+	const totalSelectable = configs + features + patterns;
+	const totalSelected = selected.configs.size + selected.features.size + selected.patterns.size;
+	return {
+		counts,
+		selected,
+		totalSelected,
+		totalSelectable,
+		allSelected: totalSelectable > 0 && totalSelected === totalSelectable,
+		toggle: (kind: SuggestionKind, i: number) =>
+			setSelected((current) => {
+				const next = new Set(current[kind]);
+				if (next.has(i)) next.delete(i);
+				else next.add(i);
+				return { ...current, [kind]: next };
+			}),
+		selectAll: () => setSelected(everything()),
+		unselectAll: () => setSelected(emptySelection()),
+		/** The API applies everything when a list is omitted, so only partial lists are sent. */
+		payload: () => {
+			const selection: { config_indices?: number[]; feature_indices?: number[]; pattern_indices?: number[] } = {};
+			if (selected.configs.size < configs) selection.config_indices = [...selected.configs];
+			if (selected.features.size < features) selection.feature_indices = [...selected.features];
+			if (selected.patterns.size < patterns) selection.pattern_indices = [...selected.patterns];
+			return Object.keys(selection).length > 0 ? selection : undefined;
+		},
+	};
+}
+
+type SuggestionSelection = ReturnType<typeof useSuggestionSelection>;
+
+/** Apply lives in the sticky header next to Export HTML, so it is reachable wherever the reader is. */
+function ApplySuggestionsControl({ report, selection }: { report?: InsightReport; selection: SuggestionSelection }) {
+	const applySuggestions = useApplyInsightSuggestions();
+	const [confirming, setConfirming] = React.useState(false);
+	if (!report || report.status !== "completed" || !report.agent_id || !selection.counts) return null;
+	if (report.applied_at) {
+		return (
+			<span className="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
+				<CheckCircle2 className="h-3 w-3" /> Suggestions applied
+			</span>
+		);
+	}
+	if (confirming) {
+		return (
+			<div className="flex items-center gap-2">
+				<span className="hidden text-xs text-muted-foreground sm:inline">Submit {selection.totalSelected} for review?</span>
+				<Button
+					size="sm"
+					className="h-8 gap-1 text-xs"
+					disabled={applySuggestions.isPending}
+					onClick={() => {
+						applySuggestions.mutate({ agentId: report.agent_id!, reportId: report.id, selection: selection.payload() });
+						setConfirming(false);
+					}}
+				>
+					{applySuggestions.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+					Confirm
+				</Button>
+				<Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setConfirming(false)}>
+					Cancel
+				</Button>
+			</div>
+		);
+	}
+	return (
+		<Button
+			size="sm"
+			className="gap-1.5"
+			disabled={applySuggestions.isPending || selection.totalSelected === 0}
+			onClick={() => setConfirming(true)}
+		>
+			<Brain className="h-4 w-4" />
+			{/* the header is narrow on phones: "Apply (2)" there, the full label from sm up */}
+			<span className="sm:hidden">Apply ({selection.totalSelected})</span>
+			<span className="hidden sm:inline">Apply suggestions ({selection.totalSelected})</span>
+		</Button>
+	);
+}
+
 function SuggestionsSection({
 	data,
 	report,
 	registryMatch,
+	selection,
 }: {
 	data: unknown;
 	report?: InsightReport;
 	registryMatch?: RegistryMatchSummary;
+	selection: SuggestionSelection;
 }) {
-	const applySuggestions = useApplyInsightSuggestions();
-	const [showConfirm, setShowConfirm] = React.useState(false);
-	const [selectedConfigs, setSelectedConfigs] = React.useState<Set<number>>(new Set());
-	const [selectedFeatures, setSelectedFeatures] = React.useState<Set<number>>(new Set());
-	const [selectedPatterns, setSelectedPatterns] = React.useState<Set<number>>(new Set());
-	const [initialized, setInitialized] = React.useState(false);
-
 	if (!data) return null;
 
 	if (Array.isArray(data) || typeof data === "string") {
@@ -731,68 +950,10 @@ function SuggestionsSection({
 	const items = obj.items as { title: string; action: string; why: string; priority: string }[] | undefined;
 
 	const hasV4 = (configAdditions && configAdditions.length > 0) || (featuresToTry && featuresToTry.length > 0) || (usagePatterns && usagePatterns.length > 0);
-
-	// Initialize all selected by default
-	if (!initialized && hasV4) {
-		const cSet = new Set(configAdditions?.map((_, i) => i) ?? []);
-		const fSet = new Set(featuresToTry?.map((_, i) => i) ?? []);
-		const pSet = new Set(usagePatterns?.map((_, i) => i) ?? []);
-		if (cSet.size || fSet.size || pSet.size) {
-			setSelectedConfigs(cSet);
-			setSelectedFeatures(fSet);
-			setSelectedPatterns(pSet);
-			setInitialized(true);
-		}
-	}
-
-	const toggleConfig = (i: number) => {
-		setSelectedConfigs((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
-	};
-	const toggleFeature = (i: number) => {
-		setSelectedFeatures((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
-	};
-	const togglePattern = (i: number) => {
-		setSelectedPatterns((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
-	};
-
-	const totalSelected = selectedConfigs.size + selectedFeatures.size + selectedPatterns.size;
-	const totalSelectable = (configAdditions?.length ?? 0) + (featuresToTry?.length ?? 0) + (usagePatterns?.length ?? 0);
-	const allSelected = totalSelectable > 0 && totalSelected === totalSelectable;
-
-	const selectAll = () => {
-		setSelectedConfigs(new Set(configAdditions?.map((_, i) => i) ?? []));
-		setSelectedFeatures(new Set(featuresToTry?.map((_, i) => i) ?? []));
-		setSelectedPatterns(new Set(usagePatterns?.map((_, i) => i) ?? []));
-		setShowConfirm(false);
-	};
-
-	const unselectAll = () => {
-		setSelectedConfigs(new Set());
-		setSelectedFeatures(new Set());
-		setSelectedPatterns(new Set());
-		setShowConfirm(false);
-	};
-
-	const handleApply = () => {
-		if (!report || !report.agent_id) return;
-		const selection: { config_indices?: number[]; feature_indices?: number[]; pattern_indices?: number[] } = {};
-		if (selectedConfigs.size < (configAdditions?.length ?? 0)) {
-			selection.config_indices = [...selectedConfigs];
-		}
-		if (selectedFeatures.size < (featuresToTry?.length ?? 0)) {
-			selection.feature_indices = [...selectedFeatures];
-		}
-		if (selectedPatterns.size < (usagePatterns?.length ?? 0)) {
-			selection.pattern_indices = [...selectedPatterns];
-		}
-		const hasSelection = Object.keys(selection).length > 0;
-		applySuggestions.mutate({
-			agentId: report.agent_id,
-			reportId: report.id,
-			selection: hasSelection ? selection : undefined,
-		});
-		setShowConfirm(false);
-	};
+	const { configs: selectedConfigs, features: selectedFeatures, patterns: selectedPatterns } = selection.selected;
+	const toggleConfig = (i: number) => selection.toggle("configs", i);
+	const toggleFeature = (i: number) => selection.toggle("features", i);
+	const togglePattern = (i: number) => selection.toggle("patterns", i);
 
 	if (!hasV4 && (!items || items.length === 0)) return null;
 
@@ -806,54 +967,17 @@ function SuggestionsSection({
 					</h3>
 				</div>
 				{report && !report.applied_at && hasV4 && (
-					<div className="relative">
-						{!showConfirm ? (
-							<div className="flex items-center gap-2">
-								<Button
-									variant="ghost"
-									size="sm"
-									className="h-8 text-xs"
-									disabled={applySuggestions.isPending || totalSelectable === 0}
-									onClick={allSelected ? unselectAll : selectAll}
-								>
-									{allSelected ? "Unselect all" : "Select all"}
-								</Button>
-								<Button
-									variant="outline"
-									size="sm"
-									className="gap-1.5 text-xs"
-									disabled={applySuggestions.isPending || totalSelected === 0}
-									onClick={() => setShowConfirm(true)}
-								>
-									<Brain className="h-3.5 w-3.5" /> Apply Selected ({totalSelected})
-								</Button>
-							</div>
-						) : (
-							<div className="flex items-center gap-2">
-								<span className="text-xs text-muted-foreground">Submit {totalSelected} items to review?</span>
-								<Button
-									size="sm"
-									className="h-7 text-xs gap-1"
-									disabled={applySuggestions.isPending}
-									onClick={handleApply}
-								>
-									{applySuggestions.isPending ? (
-										<Loader2 className="h-3 w-3 animate-spin" />
-									) : (
-										<CheckCircle2 className="h-3 w-3" />
-									)}
-									Confirm
-								</Button>
-								<Button
-									variant="ghost"
-									size="sm"
-									className="h-7 text-xs"
-									onClick={() => setShowConfirm(false)}
-								>
-									Cancel
-								</Button>
-							</div>
-						)}
+					<div className="flex items-center gap-3">
+						<span className="text-xs text-muted-foreground">Tick what to apply, then use Apply at the top.</span>
+						<Button
+							variant="ghost"
+							size="sm"
+							className="h-8 text-xs"
+							disabled={selection.totalSelectable === 0}
+							onClick={selection.allSelected ? selection.unselectAll : selection.selectAll}
+						>
+							{selection.allSelected ? "Unselect all" : "Select all"}
+						</Button>
 					</div>
 				)}
 				{report?.applied_at && (
@@ -864,126 +988,66 @@ function SuggestionsSection({
 			</div>
 			<div className="px-5 py-4 space-y-6">
 				{configAdditions && configAdditions.length > 0 && (
-					<div>
-						<h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Config Additions</h4>
-						<p className="text-xs text-muted-foreground mb-3">Add these to your Agent File&apos;s system prompt or AGENTS.md.</p>
-						<div className="space-y-2">
-							{configAdditions.map((c, i) => (
-								<div
-									key={i}
-									className={`rounded-md border p-3 transition-colors ${!report?.applied_at ? "cursor-pointer" : ""} ${selectedConfigs.has(i) ? "border-primary/40 bg-primary/5" : "border-border bg-muted/10 opacity-60"}`}
-									onClick={!report?.applied_at ? () => toggleConfig(i) : undefined}
-								>
-									<div className="flex items-start gap-3">
-										{!report?.applied_at && (
-											<input type="checkbox" checked={selectedConfigs.has(i)} onClick={(event) => event.stopPropagation()} onChange={() => toggleConfig(i)} className="mt-1 h-4 w-4 rounded border-border" />
-										)}
-										<div className="flex-1">
-											<span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground mr-2">{c.where}</span>
-											{c.confidence && <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground mr-2">{c.confidence} confidence</span>}
-											{c.risk && <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground mr-2">{c.risk} risk</span>}
-											<span className="text-sm font-medium">{c.addition}</span>
-										</div>
-										<CopyButton text={c.addition} />
-									</div>
-									{c.why && <p className="text-xs text-muted-foreground mt-2 italic ml-7">Why: {c.why}</p>}
-								</div>
-							))}
-						</div>
-					</div>
+					<SuggestionGroup title="Prompt changes" hint="Lines to add to the Agent File's system prompt or AGENTS.md.">
+						{configAdditions.map((c, i) => (
+							<SuggestionCard
+								key={i}
+								selectable={!report?.applied_at}
+								selected={selectedConfigs.has(i)}
+								onToggle={() => toggleConfig(i)}
+								title={c.addition}
+								reason={c.why}
+								copyText={c.addition}
+							/>
+						))}
+					</SuggestionGroup>
 				)}
 
-				{/* V4: Features to Try */}
 				{featuresToTry && featuresToTry.length > 0 && (
-					<div>
-						<h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Features to Try</h4>
-						<div className="mb-3">
-							<RegistryMatchNote summary={registryMatch} />
-						</div>
-						<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-							{/* Reuse suggestions lead: "you already own this" is a better
-							    answer than "build this", so it should be read first. */}
-							{featuresToTry
-								.map((f, i) => ({ f, i }))
-								.sort((a, b) => Number(Boolean(b.f.component_ref)) - Number(Boolean(a.f.component_ref)))
-								.map(({ f, i }) => (
-								<div
+					<SuggestionGroup title="Components to add" note={<RegistryMatchNote summary={registryMatch} />}>
+						{/* Reuse suggestions lead: "you already own this" is a better
+						    answer than "build this", so it should be read first. */}
+						{featuresToTry
+							.map((f, i) => ({ f, i }))
+							.sort((a, b) => Number(Boolean(b.f.component_ref)) - Number(Boolean(a.f.component_ref)))
+							.map(({ f, i }) => (
+								<SuggestionCard
 									key={i}
-									className={`rounded-md border p-3 transition-colors ${!report?.applied_at ? "cursor-pointer" : ""} ${selectedFeatures.has(i) ? "border-primary/40 bg-primary/5" : "border-border bg-muted/10 opacity-60"}`}
-									onClick={!report?.applied_at ? () => toggleFeature(i) : undefined}
+									selectable={!report?.applied_at}
+									selected={selectedFeatures.has(i)}
+									onToggle={() => toggleFeature(i)}
+									kind={f.component_ref ? "Reuse, don't rebuild" : `New ${(f.feature || "component").toLowerCase()}`}
+									highlightKind={Boolean(f.component_ref)}
+									title={f.one_liner}
+									reason={f.why_for_you}
+									// A reuse suggestion has no generated body to copy.
+									copyText={f.component_ref ? undefined : f.example}
 								>
-									<div className="flex items-start gap-2">
-										{!report?.applied_at && (
-											<input type="checkbox" checked={selectedFeatures.has(i)} onClick={(event) => event.stopPropagation()} onChange={() => toggleFeature(i)} className="mt-1 h-4 w-4 rounded border-border" />
-										)}
-										<div className="flex-1">
-											<span
-												className={`text-xs px-2 py-0.5 rounded-full ${
-													f.component_ref
-														? "bg-primary-accent/15 text-primary-accent font-medium"
-														: "bg-muted text-muted-foreground"
-												}`}
-											>
-												{f.component_ref ? "Reuse — don't rebuild" : (f.action_type ?? f.feature)}
-											</span>
-											{f.confidence && <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">{f.confidence} confidence</span>}
-											{f.risk && <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">{f.risk} risk</span>}
-											<div className="font-medium text-sm mt-2">{f.one_liner}</div>
-											<p className="text-xs text-foreground/60 mt-1">{f.why_for_you}</p>
-											{f.component_ref && <ReuseBadge componentRef={f.component_ref} />}
-											{f.match_reason && (
-												<p className="text-xs text-muted-foreground mt-2 italic">Why this fits: {f.match_reason}</p>
-											)}
-											{/* A reuse suggestion has no generated body to copy. */}
-											{f.example && !f.component_ref && (
-												<>
-													<pre className="mt-2 p-2 rounded bg-muted/30 text-xs font-[family-name:var(--font-mono)] text-foreground/70 whitespace-pre-wrap break-all">
-														{f.example}
-													</pre>
-													<CopyButton text={f.example} className="mt-1" />
-												</>
-											)}
-										</div>
-									</div>
-								</div>
+									{f.component_ref && <ReuseBadge componentRef={f.component_ref} />}
+									{f.match_reason && <p className="text-sm leading-6 text-muted-foreground"><RichText text={f.match_reason} /></p>}
+									{f.example && !f.component_ref && <SuggestionSnippet text={f.example} />}
+								</SuggestionCard>
 							))}
-						</div>
-					</div>
+					</SuggestionGroup>
 				)}
 
-				{/* V4: Usage Patterns with copyable prompts */}
 				{usagePatterns && usagePatterns.length > 0 && (
-					<div>
-						<h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Usage Patterns</h4>
-						<div className="space-y-3">
-							{usagePatterns.map((p, i) => (
-								<div
-									key={i}
-									className={`rounded-md border p-3 transition-colors ${!report?.applied_at ? "cursor-pointer" : ""} ${selectedPatterns.has(i) ? "border-primary/40 bg-primary/5" : "border-border bg-muted/10 opacity-60"}`}
-									onClick={!report?.applied_at ? () => togglePattern(i) : undefined}
-								>
-									<div className="flex items-start gap-2">
-										{!report?.applied_at && (
-											<input type="checkbox" checked={selectedPatterns.has(i)} onClick={(event) => event.stopPropagation()} onChange={() => togglePattern(i)} className="mt-1 h-4 w-4 rounded border-border" />
-										)}
-										<div className="flex-1">
-											<div className="font-medium text-sm">{p.title}</div>
-											<p className="text-sm text-foreground/70 mt-1">{p.suggestion}</p>
-											<p className="text-xs text-muted-foreground mt-2">{p.detail}</p>
-											{p.copyable_prompt && (
-												<>
-													<pre className="mt-2 p-2 rounded bg-muted/30 text-xs font-[family-name:var(--font-mono)] text-foreground/70 whitespace-pre-wrap break-all">
-														{p.copyable_prompt}
-													</pre>
-													<CopyButton text={p.copyable_prompt} className="mt-1" />
-												</>
-											)}
-										</div>
-									</div>
-								</div>
-							))}
-						</div>
-					</div>
+					<SuggestionGroup title="Ways to work with it">
+						{usagePatterns.map((p, i) => (
+							<SuggestionCard
+								key={i}
+								selectable={!report?.applied_at}
+								selected={selectedPatterns.has(i)}
+								onToggle={() => togglePattern(i)}
+								title={p.title}
+								reason={p.suggestion}
+								copyText={p.copyable_prompt}
+							>
+								{p.detail && <p className="text-sm leading-6 text-muted-foreground"><RichText text={p.detail} /></p>}
+								{p.copyable_prompt && <SuggestionSnippet text={p.copyable_prompt} />}
+							</SuggestionCard>
+						))}
+					</SuggestionGroup>
 				)}
 
 				{/* V3 fallback: items array */}
@@ -1036,11 +1100,11 @@ function OnTheHorizon({ data }: { data: unknown }) {
 				</h3>
 			</div>
 			<div className="px-5 py-4 space-y-4">
-				{obj.intro && <p className="text-sm text-muted-foreground">{obj.intro}</p>}
+				{obj.intro && <p className="text-sm text-muted-foreground"><RichText text={obj.intro} /></p>}
 				{opportunities.map((opp, i) => (
 					<div key={i} className="rounded-md border border-border bg-muted/10 p-4">
 						<div className="font-medium text-sm text-violet-300">{opp.title}</div>
-						<p className="text-sm text-foreground/70 mt-2">{opp.whats_possible}</p>
+						<p className="text-sm text-foreground/70 mt-2"><RichText text={opp.whats_possible} /></p>
 						<p className="text-xs text-muted-foreground mt-2">{opp.how_to_try}</p>
 						{opp.copyable_prompt && (
 							<>
@@ -1100,7 +1164,7 @@ function TokenSection({
 					</h3>
 				</div>
 				<div className="px-5 py-4 space-y-4">
-					{summary && <p className="text-sm text-foreground/80">{summary}</p>}
+					{summary && <p className="text-sm text-foreground/80"><RichText text={summary} /></p>}
 
 					{hasCostMetrics && costMetrics && (
 						<div className="grid grid-cols-3 gap-3">
@@ -1143,8 +1207,7 @@ function TokenSection({
 									<div>
 										<span className="font-medium">{opp.title}</span>
 										<span className="text-foreground/60">
-											{" "}
-											— {opp.description}
+											:{" "}<RichText text={opp.description} />
 										</span>
 										{opp.estimated_savings && (
 											<span className="text-success ml-1">
@@ -1245,7 +1308,7 @@ function UserExperienceSection({ data }: { data: unknown }) {
 			<div className="px-5 py-4 space-y-4">
 				{narrative && (
 					<p className="text-sm leading-relaxed text-foreground/80">
-						{narrative}
+						<RichText text={narrative} />
 					</p>
 				)}
 
@@ -1285,8 +1348,7 @@ function UserExperienceSection({ data }: { data: unknown }) {
 									<span className="font-medium">{s.signal}</span>
 									{s.interpretation && (
 										<span className="text-muted-foreground">
-											{" "}
-											— {s.interpretation}
+											:{" "}<RichText text={s.interpretation} />
 										</span>
 									)}
 								</div>
@@ -1330,7 +1392,7 @@ function VersionComparisonSection({ data }: { data: unknown }) {
 				<h3 className="text-sm font-semibold">Version Comparison</h3>
 			</div>
 			<div className="px-5 py-4 space-y-4">
-				{summary && <p className="text-sm text-foreground/80">{summary}</p>}
+				{summary && <p className="text-sm text-foreground/80"><RichText text={summary} /></p>}
 				{confidence && (
 					<div className="text-xs text-muted-foreground">
 						Confidence: <span className="font-medium">{confidence}</span>
@@ -1366,7 +1428,7 @@ function VersionComparisonSection({ data }: { data: unknown }) {
 										</div>
 									)}
 									{change.evidence && (
-										<p className="mt-2 text-sm text-foreground/70">{change.evidence}</p>
+										<p className="mt-2 text-sm text-foreground/70"><RichText text={change.evidence} /></p>
 									)}
 								</div>
 							);
@@ -1568,7 +1630,7 @@ function FunEnding({ data }: { data: unknown }) {
 				</div>
 			)}
 			{obj.detail && (
-				<p className="text-sm text-muted-foreground italic">{obj.detail}</p>
+				<p className="text-sm text-muted-foreground italic"><RichText text={obj.detail} /></p>
 			)}
 		</div>
 	);
@@ -1766,7 +1828,7 @@ function formatItem(item: unknown): string {
 		return (
 			Object.values(obj)
 				.filter((v) => typeof v === "string")
-				.join(" — ") || JSON.stringify(obj)
+				.join(" · ") || JSON.stringify(obj)
 		);
 	}
 	return String(item);
@@ -1774,7 +1836,15 @@ function formatItem(item: unknown): string {
 
 // ── Main Report Content ─────────────────────────────────────────────────
 
-function ReportContent({ report }: { report: InsightReport }) {
+function ReportContent({
+	report,
+	selection,
+	sections,
+}: {
+	report: InsightReport;
+	selection: SuggestionSelection;
+	sections: ReturnType<typeof useReportSections>;
+}) {
 	const metrics = report.metrics;
 	const narrative = report.narrative;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1822,145 +1892,155 @@ function ReportContent({ report }: { report: InsightReport }) {
 
 	const fmtHours = (h: number) => h < 1 ? `${Math.round(h * 60)}m` : `${h.toFixed(1)}h`;
 
+	const show = (group: Parameters<typeof sections.toggle>[0]) => sections.visible.has(group);
+
 	return (
 		<div className="space-y-6">
-			{/* At a Glance (4-panel executive summary) */}
-			<AtAGlance data={narrative?.at_a_glance} />
+			{/* Up to five points with their evidence one click away; everything else is opt-in below. */}
+			<KeyPointsSummary report={report} />
+			<SectionToggles sections={sections} />
 
-			{/* Stats Overview (matching pi /insights layout) */}
-			<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-				<MetricCard label="Sessions" value={totalSessions} icon={Zap} subtext={daysActive > 0 ? `${daysActive} active days` : uniqueUsers > 1 ? `${uniqueUsers} users` : undefined} />
-				<MetricCard label="Messages" value={fmt(totalMessages)} icon={Database} subtext={totalSessions > 0 ? `${(totalMessages / totalSessions).toFixed(1)} per session` : undefined} />
-				<MetricCard label="Active Time" value={fmtHours(activeHours)} icon={Timer} />
-				{sessionsWithTokens > 0 && <MetricCard label="Tokens In" value={fmt(inputTokens)} icon={Database} />}
-				{sessionsWithTokens > 0 && <MetricCard label="Tokens Out" value={fmt(outputTokens)} icon={Database} />}
-				{cacheReadTokens > 0 && <MetricCard label="Cache Read" value={fmt(cacheReadTokens)} icon={Database} />}
-				{cacheWriteTokens > 0 && <MetricCard label="Cache Write" value={fmt(cacheWriteTokens)} icon={Database} />}
-				{cacheHitRate != null && <MetricCard label="Cache Efficiency" value={`${cacheHitRate.toFixed(1)}%`} icon={Zap} subtext={`${fmt(cacheReadTokens)} tokens saved`} />}
-				{totalCost > 0 && <MetricCard label="Total Cost" value={`$${totalCost.toFixed(2)}`} icon={DollarSign} subtext={totalSessions > 0 ? `$${(totalCost / totalSessions).toFixed(2)}/session` : undefined} />}
-				{sessionsWithCredits > 0 && <MetricCard label="Credits Used" value={totalCredits.toFixed(2)} icon={Coins} subtext={totalSessions > 0 ? `${(totalCredits / totalSessions).toFixed(2)}/session` : undefined} />}
-				<MetricCard label="Lines Added" value={fmt(linesAdded)} icon={Zap} />
-				<MetricCard label="Lines Removed" value={fmt(linesRemoved)} icon={AlertTriangle} />
-				<MetricCard label="Git Commits" value={gitCommits} icon={Wrench} subtext={gitPushes > 0 ? `${gitPushes} pushes` : undefined} />
-				<MetricCard label="Files Modified" value={fmt(filesModified)} icon={Database} />
-				<MetricCard label="Tool Errors" value={toolErrors} icon={AlertTriangle} />
-				<MetricCard label="Interruptions" value={interruptions} icon={AlertTriangle} />
-				{subagentSessions > 0 && <MetricCard label="Subagent Sessions" value={subagentSessions} icon={Users} />}
-				{mcpSessions > 0 && <MetricCard label="MCP Sessions" value={mcpSessions} icon={Wrench} />}
-			</div>
+			{show("suggestions") && (
+				<>
+					<SuggestionsSection
+						data={narrative?.suggestions}
+						report={report}
+						registryMatch={narrative?.registry_match as RegistryMatchSummary | undefined}
+						selection={selection}
+					/>
+					<DiscoveryOptimizationSection requested={report.discovery_optimization_requested} result={narrative?.discovery} />
+				</>
+			)}
 
-			{(canonicalDirty.canonical_sessions || canonicalDirty.dirty_sessions) && (
-				<div className="rounded-lg border border-border bg-card p-4">
-					<div className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-3">Canonical vs Dirty Installs</div>
-					<div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-						<div><div className="text-lg font-bold tabular-nums">{canonicalDirty.canonical_sessions ?? 0}</div><div className="text-xs text-muted-foreground">canonical sessions</div></div>
-						<div><div className="text-lg font-bold tabular-nums">{canonicalDirty.dirty_sessions ?? 0}</div><div className="text-xs text-muted-foreground">dirty sessions</div></div>
-						<div><div className="text-lg font-bold tabular-nums">{canonicalDirty.canonical_users ?? 0}</div><div className="text-xs text-muted-foreground">canonical users</div></div>
-						<div><div className="text-lg font-bold tabular-nums">{canonicalDirty.dirty_users ?? 0}</div><div className="text-xs text-muted-foreground">dirty users</div></div>
+			{show("analysis") && (
+				<>
+					<AtAGlance data={narrative?.at_a_glance} />
+					<FrictionSection data={narrative?.friction_analysis} />
+					<StrengthsSection data={narrative?.what_works} />
+					<ProjectAreas data={narrative?.what_they_work_on} />
+					<UsagePatterns data={narrative?.usage_patterns} />
+					<InteractionStyleSection data={narrative?.interaction_style} />
+				</>
+			)}
+
+			{show("metrics") && (
+				<>
+					<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+						<MetricCard label="Sessions" value={totalSessions} icon={Zap} subtext={daysActive > 0 ? `${daysActive} active days` : uniqueUsers > 1 ? `${uniqueUsers} users` : undefined} />
+						<MetricCard label="Messages" value={fmt(totalMessages)} icon={Database} subtext={totalSessions > 0 ? `${(totalMessages / totalSessions).toFixed(1)} per session` : undefined} />
+						<MetricCard label="Active Time" value={fmtHours(activeHours)} icon={Timer} />
+						{sessionsWithTokens > 0 && <MetricCard label="Tokens In" value={fmt(inputTokens)} icon={Database} />}
+						{sessionsWithTokens > 0 && <MetricCard label="Tokens Out" value={fmt(outputTokens)} icon={Database} />}
+						{cacheReadTokens > 0 && <MetricCard label="Cache Read" value={fmt(cacheReadTokens)} icon={Database} />}
+						{cacheWriteTokens > 0 && <MetricCard label="Cache Write" value={fmt(cacheWriteTokens)} icon={Database} />}
+						{cacheHitRate != null && <MetricCard label="Cache Efficiency" value={`${cacheHitRate.toFixed(1)}%`} icon={Zap} subtext={`${fmt(cacheReadTokens)} tokens saved`} />}
+						{totalCost > 0 && <MetricCard label="Total Cost" value={`$${totalCost.toFixed(2)}`} icon={DollarSign} subtext={totalSessions > 0 ? `$${(totalCost / totalSessions).toFixed(2)}/session` : undefined} />}
+						{sessionsWithCredits > 0 && <MetricCard label="Credits Used" value={totalCredits.toFixed(2)} icon={Coins} subtext={totalSessions > 0 ? `${(totalCredits / totalSessions).toFixed(2)}/session` : undefined} />}
+						<MetricCard label="Lines Added" value={fmt(linesAdded)} icon={Zap} />
+						<MetricCard label="Lines Removed" value={fmt(linesRemoved)} icon={AlertTriangle} />
+						<MetricCard label="Git Commits" value={gitCommits} icon={Wrench} subtext={gitPushes > 0 ? `${gitPushes} pushes` : undefined} />
+						<MetricCard label="Files Modified" value={fmt(filesModified)} icon={Database} />
+						<MetricCard label="Tool Errors" value={toolErrors} icon={AlertTriangle} />
+						<MetricCard label="Interruptions" value={interruptions} icon={AlertTriangle} />
+						{subagentSessions > 0 && <MetricCard label="Subagent Sessions" value={subagentSessions} icon={Users} />}
+						{mcpSessions > 0 && <MetricCard label="MCP Sessions" value={mcpSessions} icon={Wrench} />}
 					</div>
-				</div>
-			)}
 
-			{/* Top Tools + Languages (bar charts like pi /insights) */}
-			{(topTools.length > 0 || topLanguages.length > 0) && (
-				<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-					{topTools.length > 0 && (
+					{(canonicalDirty.canonical_sessions || canonicalDirty.dirty_sessions) && (
 						<div className="rounded-lg border border-border bg-card p-4">
-							<h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Top Tools</h3>
-							{topTools.slice(0, 10).map(([name, count]) => {
-								const max = topTools[0]?.[1] || 1;
-								return (
-									<div key={name} className="flex items-center gap-2 mb-1.5 text-xs">
-										<span className="w-32 shrink-0 text-muted-foreground truncate capitalize">{name}</span>
-										<div className="flex-1 h-2.5 bg-muted/30 rounded-full overflow-hidden">
-											<div className="h-full bg-primary-accent rounded-full transition-all" style={{ width: `${(count / max) * 100}%` }} />
-										</div>
-										<span className="w-12 text-right text-muted-foreground tabular-nums font-mono">{fmt(count)}</span>
-									</div>
-								);
-							})}
-						</div>
-					)}
-					{topLanguages.length > 0 && (
-						<div className="rounded-lg border border-border bg-card p-4">
-							<h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Languages</h3>
-							{topLanguages.map(([name, count]) => {
-								const max = topLanguages[0]?.[1] || 1;
-								return (
-									<div key={name} className="flex items-center gap-2 mb-1.5 text-xs">
-										<span className="w-32 shrink-0 text-muted-foreground truncate">{name}</span>
-										<div className="flex-1 h-2.5 bg-muted/30 rounded-full overflow-hidden">
-											<div className="h-full bg-teal-400 rounded-full transition-all" style={{ width: `${(count / max) * 100}%` }} />
-										</div>
-										<span className="w-12 text-right text-muted-foreground tabular-nums font-mono">{fmt(count)}</span>
-									</div>
-								);
-							})}
-						</div>
-					)}
-				</div>
-			)}
-
-			{/* Tool Error Categories */}
-			{Object.keys(toolErrorCats).length > 0 && (
-				<div className="rounded-lg border border-border bg-card p-4">
-					<h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Tool Error Breakdown</h3>
-					{Object.entries(toolErrorCats).sort((a, b) => b[1] - a[1]).map(([cat, count]) => {
-						const max = Object.values(toolErrorCats).reduce((a, b) => Math.max(a, b), 1);
-						return (
-							<div key={cat} className="flex items-center gap-2 mb-1.5 text-xs">
-								<span className="w-32 shrink-0 text-muted-foreground truncate capitalize">{cat.replace(/_/g, " ")}</span>
-								<div className="flex-1 h-2.5 bg-muted/30 rounded-full overflow-hidden">
-									<div className="h-full bg-destructive/60 rounded-full" style={{ width: `${(count / max) * 100}%` }} />
-								</div>
-								<span className="w-12 text-right text-muted-foreground tabular-nums font-mono">{count}</span>
+							<div className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-3">Canonical vs Dirty Installs</div>
+							<div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+								<div><div className="text-lg font-bold tabular-nums">{canonicalDirty.canonical_sessions ?? 0}</div><div className="text-xs text-muted-foreground">canonical sessions</div></div>
+								<div><div className="text-lg font-bold tabular-nums">{canonicalDirty.dirty_sessions ?? 0}</div><div className="text-xs text-muted-foreground">dirty sessions</div></div>
+								<div><div className="text-lg font-bold tabular-nums">{canonicalDirty.canonical_users ?? 0}</div><div className="text-xs text-muted-foreground">canonical users</div></div>
+								<div><div className="text-lg font-bold tabular-nums">{canonicalDirty.dirty_users ?? 0}</div><div className="text-xs text-muted-foreground">dirty users</div></div>
 							</div>
-						);
-					})}
-				</div>
+						</div>
+					)}
+				</>
 			)}
 
-			{/* Facets Charts (Goals, Outcomes, Satisfaction, Friction) */}
-			<FacetsCharts facets={facetsSummary} />
+			{show("charts") && (
+				<>
+					{(topTools.length > 0 || topLanguages.length > 0) && (
+						<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+							{topTools.length > 0 && (
+								<div className="rounded-lg border border-border bg-card p-4">
+									<h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Top Tools</h3>
+									{topTools.slice(0, 10).map(([name, count]) => {
+										const max = topTools[0]?.[1] || 1;
+										return (
+											<div key={name} className="flex items-center gap-2 mb-1.5 text-xs">
+												<span className="w-32 shrink-0 text-muted-foreground truncate capitalize">{name}</span>
+												<div className="flex-1 h-2.5 bg-muted/30 rounded-full overflow-hidden">
+													<div className="h-full bg-primary-accent rounded-full transition-all" style={{ width: `${(count / max) * 100}%` }} />
+												</div>
+												<span className="w-12 text-right text-muted-foreground tabular-nums font-mono">{fmt(count)}</span>
+											</div>
+										);
+									})}
+								</div>
+							)}
+							{topLanguages.length > 0 && (
+								<div className="rounded-lg border border-border bg-card p-4">
+									<h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Languages</h3>
+									{topLanguages.map(([name, count]) => {
+										const max = topLanguages[0]?.[1] || 1;
+										return (
+											<div key={name} className="flex items-center gap-2 mb-1.5 text-xs">
+												<span className="w-32 shrink-0 text-muted-foreground truncate">{name}</span>
+												<div className="flex-1 h-2.5 bg-muted/30 rounded-full overflow-hidden">
+													<div className="h-full bg-teal-400 rounded-full transition-all" style={{ width: `${(count / max) * 100}%` }} />
+												</div>
+												<span className="w-12 text-right text-muted-foreground tabular-nums font-mono">{fmt(count)}</span>
+											</div>
+										);
+									})}
+								</div>
+							)}
+						</div>
+					)}
 
-			{/* Project Areas */}
-			<ProjectAreas data={narrative?.what_they_work_on} />
+					{Object.keys(toolErrorCats).length > 0 && (
+						<div className="rounded-lg border border-border bg-card p-4">
+							<h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Tool Error Breakdown</h3>
+							{Object.entries(toolErrorCats).sort((a, b) => b[1] - a[1]).map(([cat, count]) => {
+								const max = Object.values(toolErrorCats).reduce((a, b) => Math.max(a, b), 1);
+								return (
+									<div key={cat} className="flex items-center gap-2 mb-1.5 text-xs">
+										<span className="w-32 shrink-0 text-muted-foreground truncate capitalize">{cat.replace(/_/g, " ")}</span>
+										<div className="flex-1 h-2.5 bg-muted/30 rounded-full overflow-hidden">
+											<div className="h-full bg-destructive/60 rounded-full" style={{ width: `${(count / max) * 100}%` }} />
+										</div>
+										<span className="w-12 text-right text-muted-foreground tabular-nums font-mono">{count}</span>
+									</div>
+								);
+							})}
+						</div>
+					)}
 
-			{/* Usage Patterns */}
-			<UsagePatterns data={narrative?.usage_patterns} />
+					<FacetsCharts facets={facetsSummary} />
+				</>
+			)}
 
-			{/* Interaction Style */}
-			<InteractionStyleSection data={narrative?.interaction_style} />
+			{show("cost") && (
+				<>
+					{/* Cost and token efficiency needs actual token or pay as you go cost data. */}
+					{showTokenSection && <TokenSection data={narrative?.usage_cost_analysis || narrative?.token_optimization} metrics={metrics} />}
+					<VersionComparisonSection data={narrative?.version_comparison} />
+					<RegressionSection
+						data={narrative?.regression_detection}
+						regressions={narrative?.regressions}
+					/>
+				</>
+			)}
 
-			{/* What Works (Impressive Workflows) */}
-			<StrengthsSection data={narrative?.what_works} />
-
-			{/* Friction Analysis */}
-			<FrictionSection data={narrative?.friction_analysis} />
-
-			{/* Suggestions */}
-			<SuggestionsSection
-				data={narrative?.suggestions}
-				report={report}
-				registryMatch={narrative?.registry_match as RegistryMatchSummary | undefined}
-			/>
-
-			{/* On the Horizon */}
-			<OnTheHorizon data={narrative?.on_the_horizon} />
-
-			{/* Cost and token efficiency needs actual token or pay as you go cost data. */}
-			{showTokenSection && <TokenSection data={narrative?.usage_cost_analysis || narrative?.token_optimization} metrics={metrics} />}
-
-			<VersionComparisonSection data={narrative?.version_comparison} />
-
-			{/* Regression Detection */}
-			<RegressionSection
-				data={narrative?.regression_detection}
-				regressions={narrative?.regressions}
-			/>
-
-			{/* Fun Ending */}
-			<FunEnding data={narrative?.fun_ending} />
+			{show("outlook") && (
+				<>
+					<OnTheHorizon data={narrative?.on_the_horizon} />
+					<FunEnding data={narrative?.fun_ending} />
+				</>
+			)}
 
 			{/* No narrative fallback */}
 			{!narrative && metrics && (
@@ -1981,6 +2061,8 @@ export default function InsightReportPage() {
 	const { agentId, reportId } = useParams({ from: "/_authed/agents/$agentId/insights/$reportId" });
 	const router = useRouter();
 	const { data: report, isLoading, isError } = useInsightReport(agentId, reportId);
+	const selection = useSuggestionSelection(report);
+	const sections = useReportSections();
 
 	return (
 		<>
@@ -1991,19 +2073,22 @@ export default function InsightReportPage() {
 					{ label: `Insight report · ${agentId}` },
 				]}
 				actionButtonsRight={
-					<div className="flex items-center gap-2">
+					<div className="flex shrink-0 items-center gap-2">
+						<ApplySuggestionsControl report={report} selection={selection} />
+						{/* icons only below sm, so Apply, Export, Back and search all fit on a phone */}
 						{report?.status === "completed" && (
 							<Button
 								variant="outline"
 								size="sm"
 								className="gap-1.5"
+								aria-label="Export HTML"
 								onClick={() => insights.exportHtml(agentId, reportId)}
 							>
-								<Download className="h-4 w-4" /> Export HTML
+								<Download className="h-4 w-4" /> <span className="hidden sm:inline">Export HTML</span>
 							</Button>
 						)}
-						<Button variant="ghost" size="sm" className="gap-1.5" onClick={() => router.history.back()}>
-							<ArrowLeft className="h-4 w-4" /> Back
+						<Button variant="ghost" size="sm" className="gap-1.5" aria-label="Back" onClick={() => router.history.back()}>
+							<ArrowLeft className="h-4 w-4" /> <span className="hidden sm:inline">Back</span>
 						</Button>
 					</div>
 				}
@@ -2021,9 +2106,9 @@ export default function InsightReportPage() {
 				{report && (
 					<div className="space-y-6">
 						{/* Header with status and metadata */}
-						<div className="flex items-center justify-between">
+						<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
 							<StatusIndicator status={report.status} />
-							<div className="text-xs text-muted-foreground space-x-3">
+							<div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
 								{report.agent_version && <span>Version v{report.agent_version}</span>}
 								{report.comparison_agent_version && <span>Compared to v{report.comparison_agent_version}</span>}
 								<span>
@@ -2071,7 +2156,7 @@ export default function InsightReportPage() {
 						)}
 
 						{/* Completed: show content */}
-						{report.status === "completed" && <ReportContent report={report} />}
+						{report.status === "completed" && <ReportContent report={report} selection={selection} sections={sections} />}
 					</div>
 				)}
 			</div>

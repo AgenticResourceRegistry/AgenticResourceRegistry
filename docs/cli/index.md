@@ -4,11 +4,13 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
 # SPDX-FileCopyrightText: 2026 Nithin-Bhargav-07 <gaddamnithinbhargav@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Overview"
+title: "CLI reference"
+description: "Find command groups, output contracts, secure automation inputs, and error behavior."
 ---
 
-Complete reference for the `observal` CLI. Every subcommand has its own page; this overview is the index.
+Index of the main `observal` command groups, output conventions, and related guides. Use the selected command's help for the exact options in your installed release. [Match documentation and software versions](/reference/documentation-version).
 
 > **New to Agentic Resource Registry?** Start with [Quickstart](/getting-started/quickstart) and come back here when you need a specific command.
 
@@ -20,7 +22,7 @@ Complete reference for the `observal` CLI. Every subcommand has its own page; th
 | [`observal auth`](/cli/auth)                                                                 | Authentication and account management                                                 |
 | [`observal config`](/cli/config)                                                             | Local CLI configuration, aliases                                                      |
 | [`observal discover`](/cli/discover)                                                         | Find approved resources for a task and use them in the current session                |
-| [`observal scan`](/cli/scan)                                                                 | Discover what's installed across your harnesses (read-only)                           |
+| [`observal scan`](/cli/scan)                                                                 | Inspect local configuration; `--inventory` is the read-only mode                           |
 | [`observal share`](/cli/share)                                                               | Share and pull scoped, version-pinned repository Agent sets                           |
 | [`observal outdated`](/cli/outdated)                                                         | Compare installed agent and component versions with the active registry               |
 | [`observal reconcile`](/cli/reconcile)                                                       | Backfill sessions missed by automatic telemetry delivery                              |
@@ -33,18 +35,19 @@ Complete reference for the `observal` CLI. Every subcommand has its own page; th
 | [`observal agent`](/cli/agent)                                                               | Create, install, and manage agents                                                     |
 | [`observal team`](/cli/team)                                                                 | Manage teamspaces, members, join requests, and invitations                            |
 | [`observal ops`](/cli/ops)                                                                   | Observability and operations (sessions, telemetry, logs, insights)                    |
-| [`observal admin`](/cli/admin)                                                               | Core administration and submission review                                             |
+| [`observal review`](/guides/review-and-publish)                                              | Inspect candidates, review, and verify publication policy                             |
+| [`observal admin`](/cli/admin)                                                               | Deployment settings, users, and administrative operations                                             |
 | [`observal doctor support`](/cli/support)                                                   | Generate and inspect redacted diagnostic bundles                                      |
 | [`observal doctor`](/cli/doctor)                                                             | Diagnose harness compatibility; `doctor patch` applies instrumentation                |
-| [`observal server migrate`](/cli/migrate) | Export/import PostgreSQL registry (shallow copy) and ClickHouse telemetry (deep copy) |
+| [`observal server migrate`](/cli/migrate) | Export/import PostgreSQL registry archives and ClickHouse telemetry separately |
 | [`observal self`](/cli/self)                                                                 | Upgrade or downgrade the CLI                                                          |
 | [`observal registry prompt`](/cli/prompt)                                                    | Manage reusable prompts in the registry                                               |
-| [`observal server`](/cli/server)                                                             | Manage the embedded server (start, stop, upgrade, rollback)                           |
+| [`observal server`](/cli/server)                                                             | Manage server lifecycle and supported deployment/upgrade workflows                           |
 | [`observal registry skill`](/cli/skill)                                                      | Submit, browse, and install portable skill packages                                   |
 
 ## Global options
 
-Any subcommand accepts these.
+Place root options before the command group, for example `observal --verbose agent list`. Use `observal --version` for the CLI version and per-command `--help` for local options. A command-specific `--version`, such as `agent pull --version`, selects a resource release rather than printing the platform version.
 
 | Option      | Short | Description                             |
 | ----------- | ----- | --------------------------------------- |
@@ -70,7 +73,7 @@ Paginated commands preserve server totals and requested pages. Unpaginated comma
 
 ## Exit codes
 
-Consistent across all commands:
+The shared error contract uses these codes. Older command surfaces can have documented exceptions; see the [scan exit behavior](/cli/scan#exit-codes).
 
 | Code | Meaning                                      |
 | ---- | -------------------------------------------- |
@@ -89,7 +92,7 @@ Consistent across all commands:
 
 Errors identify the failed operation, resource, remediation, and server request ID when available. Repairable failures may include a safe structured `result`; internal details appear only with `--debug`.
 
-When JSON output is selected, errors are written to stderr as one JSON object and stdout remains clean. Startup migrations and update notices never write to JSON stdout. A nonfatal startup migration warning is a structured `warning` object on stderr.
+Commands using the shared JSON error contract write errors to stderr as one object and leave stdout clean. The legacy scan unknown-harness path instead emits plain-text diagnostics with exit 1; do not parse that as a categorized error object. Startup migrations and update notices never write to JSON stdout. A nonfatal startup migration warning is a structured `warning` object on stderr.
 
 ```json
 {
@@ -111,17 +114,19 @@ When JSON output is selected, errors are written to stderr as one JSON object an
 For scripts and CI, pair flags with environment variables:
 
 ```bash
-export OBSERVAL_SERVER_URL=https://observal.your-company.internal
-export OBSERVAL_API_KEY='replace-with-your-key'
+export OBSERVAL_SERVER_URL=https://registry.example.com
+export OBSERVAL_ACCESS_TOKEN_FILE=/run/secrets/observal_access_token
 
-observal ops traces --limit 100 --output json | jq
+observal agent list --output json
 ```
+
+Provision that file through your approved secret mechanism; its value is a JWT access token, not an API key. Registry access does not supply harness/provider credentials. Mutations can require additional explicit inputs or confirmation flags.
 
 Full env var reference: [Environment variables](/reference/environment-variables).
 
 ## Output formats
 
-Read-heavy commands (`list`, `show`, `traces`, `spans`) support `--output`:
+Commands that expose `--output` can render table or JSON. JSON is not a universal dry run: installation/mutation commands can still write files or change server state. Use their documented preview/no-write options. For example:
 
 ```bash
 observal registry mcp list --output table    # default, TTY-friendly

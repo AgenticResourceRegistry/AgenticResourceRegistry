@@ -23,6 +23,7 @@ import {
 	SidebarRail,
 } from "@/components/ui/sidebar";
 import { NavUser } from "@/components/nav/nav-user";
+import { DEFAULT_REGISTRY_NAME } from "@/components/registry/registry-mark";
 import { useInboxCounts } from "@/hooks/use-inbox-api";
 
 import {
@@ -241,14 +242,14 @@ export function RegistrySidebar() {
 									{brandingWordmark ? (
 										<img
 											src={brandingWordmark}
-											alt={brandingAppName || "Observal"}
+											alt={brandingAppName || DEFAULT_REGISTRY_NAME}
 											width={140}
 											height={20}
 											className="h-5 max-w-35 object-contain object-left"
 										/>
 									) : (
 										<span className="text-base font-semibold tracking-tight font-display truncate max-w-35">
-											{brandingAppName || "Observal"}
+											{brandingAppName || DEFAULT_REGISTRY_NAME}
 										</span>
 									)}
 								</div>

@@ -7,6 +7,7 @@
 <!-- SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn> -->
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Meghana Inti <meghanainti149@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Changelog
@@ -41,7 +42,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- cap Typer below 0.29, which makes every `observal` command fail when the package is installed with a fresh dependency resolution (`uv tool install`, `pipx`)
+- accept Kiro universal array hooks across doctor, scan, inventory, and agent profile rewrites; preserve user hooks and skip unreadable profiles (#2015, #2024)
+- install and refresh array-based Kiro registry hook files without duplicating named entries or replacing unrelated hooks (#2020)
+- detect Kiro V3 reasoning models and durably upload companion model metadata as a fallback without changing source counts (#2023)
+- measure Kiro V3 sessions and retain assistant text, tool inputs and failures in both Kiro transcript formats; refresh Kiro-only facet caches (#2022)
+
 - repair in-app help links that still point at the renamed core concepts doc
+- correct the README quickstart to use `observal doctor patch`
 - install Claude Code session hooks on login when Claude Code is already present, and have doctor and scan require both the `UserPromptSubmit` and `Stop` hooks
 - answer malformed ARD search and list requests with a 400 ARD error envelope instead of a 422
 - support multi-artifact migration validation and import uploads
@@ -63,6 +71,8 @@ All notable changes to this project will be documented in this file.
 - correct the live log viewer command to `observal ops logs`
 - correct stale Next.js references and the removed API URL env var after the Vite migration
 - clear the remaining Next.js references in the Terraform variables, CI job headers, and nginx config
+- align documented Postgres, ClickHouse, Redis, and Grafana versions with the pinned images
+- replace archived MCP reference server examples in the MCP helper and `scan` docs, and list Claude Code's MCP config as `~/.claude.json` and `.mcp.json`
 
 ### Maintenance
 

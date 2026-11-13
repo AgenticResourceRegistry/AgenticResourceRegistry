@@ -74,6 +74,8 @@ import type {
 	RestartStatus,
 	SystemWarning,
 	UsagePingAdminResponse,
+	UsagePingContactState,
+	UsagePingContactUpdate,
 	UsagePingStatus,
 	InsightReportListItem,
 	InsightReport,
@@ -878,6 +880,12 @@ export const admin = {
 	usagePingStatus: () => get<UsagePingStatus>("/admin/usage-ping/status"),
 	usagePingPreview: () => get<UsagePingAdminResponse>("/admin/usage-ping/preview"),
 	sendUsagePing: () => post<UsagePingAdminResponse>("/admin/usage-ping/send", {}),
+	usagePingContact: () => get<UsagePingContactState>("/admin/usage-ping/contact"),
+	saveUsagePingContact: (body: UsagePingContactUpdate) =>
+		put<UsagePingContactState>("/admin/usage-ping/contact", body),
+	withdrawUsagePingContact: () => del<UsagePingContactState>("/admin/usage-ping/contact"),
+	deferUsagePingContact: (never: boolean) =>
+		post<UsagePingContactState>("/admin/usage-ping/contact/defer", { never }),
 	updateSetting: (key: string, body: unknown) =>
 		put<unknown>(`/admin/settings/${key}`, body),
 	deleteSetting: (key: string) => del(`/admin/settings/${key}`),
@@ -1319,18 +1327,19 @@ export const inbox = {
 export const insights = {
 	componentReports: (type: string, id: string, before?: { created_at: string; id: string }) =>
 		get<InsightReportListItem[]>(`/insights/components/${encodeURIComponent(type)}/${encodeURIComponent(id)}/reports${before ? `?before_created_at=${encodeURIComponent(before.created_at)}&before_id=${encodeURIComponent(before.id)}` : ""}`),
-	generateComponent: (type: string, id: string, periodDays = 14, versionId?: string) =>
-		post<InsightReportListItem>(`/insights/components/${encodeURIComponent(type)}/${encodeURIComponent(id)}/generate`, { period_days: periodDays, component_version_id: versionId ?? null }),
+	generateComponent: (type: string, id: string, periodDays = 14, versionId?: string, includeDiscoveryOptimization = false) =>
+		post<InsightReportListItem>(`/insights/components/${encodeURIComponent(type)}/${encodeURIComponent(id)}/generate`, { period_days: periodDays, component_version_id: versionId ?? null, include_discovery_optimization: includeDiscoveryOptimization }),
 	status: () => get<{ available: boolean; reason: string | null }>("/insights/status"),
 	sessionCount: (agentId: string, agentVersion?: string) =>
 		get<{ session_count: number; agent_version?: string; agent_version_id?: string }>(
 			`/agents/${agentId}/insights/session-count${agentVersion ? `?agent_version=${encodeURIComponent(agentVersion)}` : ""}`,
 		),
-	generate: (agentId: string, periodDays?: number, agentVersion?: string, comparisonAgentVersion?: string) =>
+	generate: (agentId: string, periodDays?: number, agentVersion?: string, comparisonAgentVersion?: string, includeDiscoveryOptimization = false) =>
 		post<InsightReportListItem>(`/agents/${agentId}/insights/reports`, {
 			...(periodDays ? { period_days: periodDays } : {}),
 			...(agentVersion ? { agent_version: agentVersion } : {}),
 			...(comparisonAgentVersion ? { comparison_agent_version: comparisonAgentVersion } : {}),
+			include_discovery_optimization: includeDiscoveryOptimization,
 		}),
 	listReports: (agentId: string) =>
 		get<InsightReportListItem[]>(`/agents/${agentId}/insights/reports`),

@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Rajat <rajattempest8736@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Kiro"
 ---
@@ -18,30 +19,64 @@ User agents live in `~/.kiro/agents/`.
 When Agentic Resource Registry installs a Kiro agent, it writes telemetry hooks into a standalone
 hooks file — `~/.kiro/hooks/observal.json` (user scope) or
 `.kiro/hooks/observal.json` (project scope) — in the v1 schema, using the
-`UserPromptSubmit` and `Stop` triggers. Both hooks run the shared
-`observal_cli.hooks.session_push --harness kiro` entry point.
+`UserPromptSubmit` and `Stop` for incremental capture, plus `SessionEnd` for
+late teardown metadata. All three use the shared
+`observal_cli.hooks.session_push --harness kiro` entry point. `SessionEnd`
+captures late records and credits; it does not authorize finalization.
 
-Kiro IDE 1.0 and CLI 3.0 read the standalone file; the IDE does not fire
-inline agent hooks. Once installed, shared hooks collect **all** Kiro sessions
-in that scope, including ordinary conversations using MCPs or skills. Agent
+Kiro's V3 engine and IDE read the standalone file; the IDE does not fire
+inline agent hooks. CLI binary version alone does not establish the active
+engine: CLI 2.x can run V2 or V3. Shared hooks can collect **all** Kiro sessions
+in that scope, including ordinary conversations using MCPs or skills, subject
+to the configured collection policy. Agent
 attribution is separate: sessions without a verified registry agent remain
 unattributed.
 
 Inline hooks do **not** hide an agent from the IDE agent picker. What does is
 `allowedTools` or `toolsSettings` without a `permissions` block: Kiro IDE 1.x
 `ProfileLoader` rejects such a profile outright (`reasonCode cli_only_agent`).
-Agentic Resource Registry no longer emits either field and strips them on pull.
+Empty CLI-only placeholders are stripped on pull. Non-empty custom values
+are preserved and require the native permissions configuration where applicable.
 
-### Legacy Kiro CLI 2.x
+### Engine-aware hook placement
 
-Kiro CLI 2.x only understands inline agent hooks. When Agentic Resource Registry detects CLI
-2.x, it additionally writes legacy inline `userPromptSubmit`/`stop` hooks into
-the agent JSON, even when the IDE is installed. Ordinary CLI 2.x sessions do
-not fire these agent-specific hooks; use `observal reconcile --harness kiro`
-to backfill them.
+V2 uses inline `userPromptSubmit`/`stop` hooks in the agent profile, even when
+an IDE is also installed. V3 uses enabled standalone coverage and omits covered
+inline events. Global coverage also suppresses duplicate workspace hooks;
+unrelated user hooks and profile settings are preserved. CLI 2.x compatibility
+is retained for uncovered events. Ordinary V2 chats without an installed
+agent's inline hooks can be backfilled with `observal reconcile --harness kiro`.
 
-Detection can be overridden with `OBSERVAL_KIRO_CLI_VERSION` and
-`OBSERVAL_KIRO_IDE` (`1`/`0`).
+Engine detection checks `OBSERVAL_KIRO_ENGINE`, then the selected global
+runtime's `settings/cli.json`, followed by the CLI setting and binary-version
+fallback. Native Kiro's `chat.agentEngine` is **global-only**: a workspace
+`.kiro/settings/cli.json` entry does not override it. Profile and hook paths
+remain scoped to the target project, but neither the target's nor the caller's
+workspace engine entry can select hook placement. This also holds when
+`kiro-cli` is absent from the repair command's `PATH`.
+
+See Kiro's [settings scopes](https://kiro.dev/docs/cli/reference/settings/#settings-scopes)
+and [saved harness default](https://kiro.dev/docs/cli/agent-harness/#save-a-default-harness).
+
+Configure the intended engine before pull or patch. After switching engines:
+
+```bash
+kiro-cli settings chat.agentEngine v3  # or v2
+observal doctor patch --harness kiro --output json
+```
+
+A future `--v2`/`--v3` launch override is not known at profile-write time.
+Patch with the matching `OBSERVAL_KIRO_ENGINE` first, then re-patch for the
+saved engine afterward. An unpatched override is outside the single-invocation
+guarantee. `OBSERVAL_KIRO_CLI_VERSION` and `OBSERVAL_KIRO_IDE` (`1`/`0`)
+override binary/IDE detection, not the native global engine setting.
+
+A temporary `OBSERVAL_KIRO_ENGINE` affects **every locked Kiro profile in the
+current registry** during doctor patch, not only the agent for one launch. A
+V3 override can strip inline hooks needed by other chats using the global V2 default. Do not patch
+under the override while affected chats run, or start those chats until you
+unset the override, re-run doctor patch using the same authentication/runtime
+roots, and verify that their normal placements are restored.
 
 The hook reads Kiro CLI JSONL files from `~/.kiro/sessions/cli/` and IDE
 transcripts from workspace session directories. It sends new records since the
@@ -55,9 +90,9 @@ separately stored delegated sub-executions.
 | Capability | Support |
 |---|---|
 | Agent profiles | Project and user scope |
-| Hook bridge | `UserPromptSubmit` and `Stop` in `.kiro/hooks/observal.json` |
+| Hook bridge | `UserPromptSubmit`, `Stop`, and capture-only `SessionEnd` in standalone hooks |
 | Custom hooks | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `PostFileSave`, `PostFileCreate`, `PostFileDelete` |
-| Legacy CLI 2.x | Inline agent hooks, only when no Kiro IDE is installed |
+| V2 engine | Inline agent hooks, including when an IDE is also installed |
 | MCP servers | `.kiro/settings/mcp.json` and `~/.kiro/settings/mcp.json` |
 | Agent prompt | Registry prompts are embedded in the generated Kiro agent profile |
 | Guidance files | Scanned from steering files and `AGENTS.md`, not overwritten |
@@ -73,8 +108,8 @@ separately stored delegated sub-executions.
 ### 1. Install the Agentic Resource Registry CLI
 
 ```bash
-uv tool install observal-cli
-# or: pipx install observal-cli
+uv tool install 'observal-cli==1.17.0' --with 'typer<0.29'
+# or: pipx install 'observal-cli==1.17.0' --pip-args='typer<0.29'
 ```
 
 ### 2. Authenticate
@@ -104,11 +139,18 @@ Project agents are written to `.kiro/agents/{name}.json`.
 
 ### 4. Refresh Kiro hooks
 
-Pull the agent again to refresh its Agentic Resource Registry hook commands.
+Pulling an agent installs shared hooks for its scope. Repair an existing Kiro
+runtime and locked profiles with:
 
-`doctor patch` does not install generic Kiro hooks: pulling an agent installs
-shared hooks for its scope. These hooks do not carry that agent's UUID and
-capture ordinary sessions too. CLI 2.x still needs per-agent inline hooks.
+```bash
+observal doctor patch --harness kiro --output json
+```
+
+Doctor recognizes complete standalone prompt/Stop coverage even without agent
+profiles. An older two-event file can still report installed, so refresh it
+and verify an enabled `SessionEnd` command in the active scope before checking
+automatic late credits. These shared hooks do not carry an agent UUID; V3
+attribution comes from native session metadata. V2 keeps per-agent inline hooks.
 
 ---
 
@@ -120,14 +162,22 @@ capture ordinary sessions too. CLI 2.x still needs per-agent inline hooks.
 | Guidance files | `.kiro/steering/*.md`, `AGENTS.md` | `~/.kiro/steering/*.md` |
 | MCP config | `.kiro/settings/mcp.json` | `~/.kiro/settings/mcp.json` |
 | Skill definition | `.kiro/skills/{name}/SKILL.md` | `~/.kiro/skills/{name}/SKILL.md` |
-| Hook config | Embedded in `.kiro/agents/{name}.json` | Embedded in `~/.kiro/agents/{name}.json` |
+| Standalone hook config | `.kiro/hooks/observal.json` | `~/.kiro/hooks/observal.json` |
 | Custom hook scripts | `.kiro/hooks/` | `~/.kiro/hooks/` |
-| Session JSONL | `~/.kiro/sessions/cli/{session_id}.jsonl` | `~/.kiro/sessions/cli/{session_id}.jsonl` |
-| Credit metadata | `~/.kiro/sessions/cli/{session_id}.json` | `~/.kiro/sessions/cli/{session_id}.json` |
+| Legacy V2 session JSONL | `~/.kiro/sessions/cli/{session_id}.jsonl` | `~/.kiro/sessions/cli/{session_id}.jsonl` |
+| Legacy V2 credit metadata | `~/.kiro/sessions/cli/{session_id}.json` | `~/.kiro/sessions/cli/{session_id}.json` |
 | Agentic Resource Registry credentials | `~/.observal/config.json` | `~/.observal/config.json` |
 | Last session cache | `~/.observal/.kiro-session` | `~/.observal/.kiro-session` |
 
-Kiro MCP configs use the `mcpServers` key.
+Kiro MCP configs use the `mcpServers` key. V2 inline hooks additionally live
+inside the agent profile. V3/IDE transcripts live under
+`~/.kiro/sessions/{workspace}/{session_id}/messages.jsonl`, with a sibling
+`session.json`; their late credits come from `usage_summary` records.
+
+`KIRO_HOME` selects the native runtime root used by discovery, credits, and
+doctor. It does not change Observal's authentication/outbox home or migrate
+previously installed user profiles. Recheck agent availability when changing
+runtime storage, and use the same runtime root when reconciling.
 
 ---
 
@@ -146,7 +196,7 @@ Agentic Resource Registry writes the telemetry hooks to the standalone v1 hooks 
       "trigger": "UserPromptSubmit",
       "action": {
         "type": "command",
-        "command": "python -m observal_cli.hooks.session_push --harness kiro"
+        "command": "python -I -m observal_cli.hooks.session_push --harness kiro --placement standalone"
       }
     },
     {
@@ -154,7 +204,15 @@ Agentic Resource Registry writes the telemetry hooks to the standalone v1 hooks 
       "trigger": "Stop",
       "action": {
         "type": "command",
-        "command": "python -m observal_cli.hooks.session_push --harness kiro"
+        "command": "python -I -m observal_cli.hooks.session_push --harness kiro --placement standalone"
+      }
+    },
+    {
+      "name": "observal-session-push-sessionend",
+      "trigger": "SessionEnd",
+      "action": {
+        "type": "command",
+        "command": "python -I -m observal_cli.hooks.session_push --harness kiro --placement standalone"
       }
     }
   ]
@@ -165,41 +223,46 @@ The command carries no `OBSERVAL_AGENT_ID`. One file per scope serves every
 agent, so an id baked into it would attribute every session to whichever agent
 was pulled last. Attribution comes from session metadata instead.
 
-On non-Windows platforms, generated server config may use `python3` instead of
-`python`. During `observal agent pull`, the CLI rewrites Agentic Resource Registry hook commands to use
-the active Python interpreter.
+This example illustrates the schema, not a launcher to copy verbatim.
+Pull and doctor generate commands using the active interpreter and an isolated
+or source-safe launcher. The `--placement` tag lets runtime acceptance prefer
+standalone capture for an observed V3 transcript without disabling V2 inline hooks.
 
 ### Legacy CLI 2.x inline hooks
 
-Kiro CLI 2.x predates the standalone file and reads hooks only from the agent
-JSON. On a machine whose `kiro-cli` reports major version 2, Agentic Resource Registry *also*
-writes inline `userPromptSubmit`/`stop` hooks into each agent profile, carrying
-`OBSERVAL_AGENT_ID` since an agent profile belongs to exactly one agent:
+The V2 engine reads hooks from the agent JSON. A CLI 2.x installation retains
+inline compatibility; for configured V3, covered events are omitted rather than
+invoked twice. The native global V2 setting also preserves inline delivery
+when the repair command cannot detect a CLI binary; workspace engine entries
+are ignored just as they are by Kiro. Inline hooks carry
+`OBSERVAL_AGENT_ID` because an agent profile belongs to one agent:
 
 ```json
 {
   "hooks": {
     "userPromptSubmit": [
       {
-        "command": "OBSERVAL_AGENT_ID=<agent-uuid> python -m observal_cli.hooks.session_push --harness kiro"
+        "command": "OBSERVAL_AGENT_ID=<agent-uuid> python -I -m observal_cli.hooks.session_push --harness kiro --placement inline"
       }
     ]
   }
 }
 ```
 
-Both formats are written on such machines. Having the IDE installed is not a
-reason to withhold the inline copy: the two surfaces coexist, and the IDE loads
-an agent carrying inline hooks and simply never fires them.
+V2 can coexist with an IDE. Installing an IDE is not a reason to withhold the
+V2 inline route. When V3 standalone coverage is missing or partial and inline
+compatibility is available, only uncovered events retain an inline fallback.
 
 ### Attribution
 
 The hooks file is shared by every agent, so the hook command cannot identify
 one. Attribution is resolved from the session itself:
 
-1. A session started as an agent — picked from the IDE's agent dropdown —
-   records that agent in `session_start.agentType`, and the agent's own profile
-   hooks fire with an agent-scoped `hookId`. Either names the agent.
+1. CLI V3 names the selected agent in a matching, bounded
+   `session.json.agentMode`, before `session_start` necessarily exists.
+   `session_start.agentType` and agent-scoped `hookId` records supply older
+   transcript evidence. Conflicting companion/session-start identity remains
+   unattributed rather than selecting another installed agent.
 2. A session that delegates records `sub_agent_start` with `subAgentName`, and
    the delegated agent's work is written to a separate child transcript. The
    parent conversation is collected but is **not** attributed to the delegate.
@@ -236,28 +299,76 @@ Kiro uses the shared acknowledged session delivery engine:
 3. Read complete records after the acknowledged byte/line cursor.
 4. Persist new batches to `~/.observal/telemetry_buffer.db` before network delivery.
 5. Retry batches idempotently until the server returns a contiguous checkpoint covering them.
-6. Advance the local cursor only to that acknowledged checkpoint.
+6. Advance the local cursor from the ACK. Explicit permanently rejected-gap
+   recovery is reported separately and does not bypass final-authority checks.
 7. Recover missing or corrupt local state from the authenticated server checkpoint.
 8. On finalization, compare the SHA-256 audit manifest and replay any affected range.
 
-On `stop`, a delayed stable-file pass captures late records and finalizes the cursor. The adapter also reads `~/.kiro/sessions/cli/{session_id}.json` and durably sends Kiro credit usage, including when no transcript lines were added by the final hook.
+V2 retains a delayed finalization worker. V3/IDE captures automatically but does
+**not** rely on detached workers for verified finalization: native shutdown can
+terminate hook descendants. `SessionEnd` captures late records, credits, and
+available companion model metadata without marking the session final. Fresh
+teardown metadata is spooled before drainage, so an older model-only batch can
+be coalesced with credits before transport.
+
+After a V3/IDE chat exits, finalize matching Stop intent from an independent terminal:
+
+```bash
+observal reconcile --harness kiro --since 24 --output json
+
+# If the native runtime root was relocated:
+KIRO_HOME=/absolute/path/used/by/kiro observal reconcile --harness kiro --since 24 --output json
+```
+
+Use the same Observal authentication home and native runtime root as the chat.
+Both examples' `--since 24` window filters transcript modification time, including
+sessions with pending Stop intent. Choose a window covering the oldest missed
+transcript, such as `--since 168` for a week (supported range: 1–8,760 hours).
+A fresh Stop intent does not include a transcript outside that window. The
+window filters discovery, not already queued outbox drainage; zero discovered
+sessions does not mean all pending finalization is complete.
+
+Reconciliation is an integrity-finalization step, not a prerequisite for agent
+attribution or automatic credits. A capture ACK, scheduled worker, or process
+exit is not completion evidence. Quiet/permission-paused sessions without a
+matching Stop remain non-final.
+
+Stop authority is tied to a generation and prompt fingerprint. A resumed prompt
+cancels old authority, including queued final semantics and waiting V2 workers,
+without deleting queued records or credits. Old unscoped queued finals remain
+deliverable but are not silently granted new authority during an upgrade; drain
+pending deliveries before upgrading when possible. Verify final cursors and
+retired Stop intent rather than inferring completion from successful capture.
+In reconcile JSON, `pushed` reports record delivery and can accompany a final
+metadata send; it is not by itself proof of local finalization.
+
+For read-only local inspection, use the shipped `read_cursor_status` helper and
+a SQLite connection opened with `mode=ro`, as shown in the
+[packaged recovery reference](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/observal_cli/skills/observal-advanced/references/recovery-workflows.md#inspect-local-kiro-completion-read-only).
+Check each collected parent/child cursor's validity, finalized flag and source
+coverage, the matching Stop intent, and queued batches under the same auth/runtime
+roots. The recipe does not contact ingestion, drain/migrate the outbox, or modify
+cursors/intents. Support bundles and aggregate telemetry counts alone do not expose
+all three local facts, and missing state must not be treated as completion.
 
 ---
 
 ## Agent profile format
 
-Agentic Resource Registry generates Markdown agent profiles like this:
+Kiro agent profiles are JSON. A simplified profile looks like:
 
-```markdown
----
-name: my-agent
-model: claude-sonnet-4
----
-
-You are a Kiro agent with the following specialization...
+```json
+{
+  "name": "my-agent",
+  "model": "auto",
+  "prompt": "You are a Kiro agent with the following specialization...",
+  "tools": []
+}
 ```
 
-The `model` field is present when a model is resolved for the agent.
+The `model` field is present when a model is resolved for the agent. Native
+permissions, upgrade state, and unrelated user hooks are preserved when
+refreshing an existing profile.
 
 ---
 
@@ -290,19 +401,18 @@ Run `pytest -q` from the project root.
 **Guidance files are scan-only.** Agentic Resource Registry layers Kiro steering files and
 `AGENTS.md` as context, but does not overwrite them during pull.
 
-**Hooks are per scope, not per agent.** Pulling an agent refreshes the shared
-`observal.json` hooks file for that scope, which then serves every Kiro agent
-there — so the file exists even when no agent is locked. Pull the agent again
-to replace an older Kiro-specific push command with the shared acknowledged
-exporter. On legacy CLI 2.x, inline per-agent hooks carrying
-`OBSERVAL_AGENT_ID` are written in addition.
+**Standalone hooks are per scope, not per agent.** Pull and doctor refresh the
+shared `observal.json` file; doctor can repair an existing native root without
+locked agents. Global V3 coverage omits duplicate project events, and doctor
+skips creating a new empty owned file. Refresh old two-event files before
+validating teardown credits. V2 additionally needs inline per-agent hooks
+carrying `OBSERVAL_AGENT_ID`.
 
 **Default scope is user.** `observal agent pull <agent-name> --harness kiro`
 writes to `~/.kiro/agents/` unless `--scope project` is set.
 
-**No Claude Code subagent layout.** Kiro reads
-`~/.kiro/sessions/cli/{session_id}.jsonl`. It does not scan Claude Code's
-`subagents/` directory.
+**No Claude Code subagent layout.** Kiro uses its native V2/V3 transcript
+layouts and V3 delegated sub-executions, not Claude Code's `subagents/` directory.
 
 **MCP config is Kiro-specific.** Kiro uses `.kiro/settings/mcp.json` and
 `~/.kiro/settings/mcp.json`, not Claude Code MCP paths.

@@ -1,131 +1,45 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Databases"
+title: "Understand registry and evidence storage"
+description: "Know what each persistent store holds and how schema changes and recovery are coordinated."
 ---
 
-Agentic Resource Registry runs two DBs with very different jobs.
+The registry's relational state and session evidence live in different stores. Preserving one does not recover the other.
 
-| DB | Role | Access pattern | Schema source of truth |
-| --- | --- | --- | --- |
-| Postgres 16 | Registry, users, config | Relational, transactional | Alembic migrations in `observal-server/alembic/versions/` |
-| ClickHouse 26.5 | Telemetry and audit event storage | Columnar, time-series, high-write | Versioned SQL migrations in `observal-server/clickhouse/migrations/` |
+| Store | Main role | Schema/change mechanism |
+| --- | --- | --- |
+| PostgreSQL | Users, resources, versions, reviews, teams, settings, and relational state | Alembic plus the reviewed fresh-schema bootstrap path |
+| ClickHouse | Session/evidence aggregates, layer snapshots/components, audit/security records, and webhook delivery data | Versioned SQL migrations |
+| Redis | Jobs, pub/sub, cached settings, and authentication/revocation coordination | Runtime state and configured persistence |
 
-## Postgres
+Current source images and the eight-service inventory are listed in [self-hosting overview](/self-hosting/index#architecture-at-a-glance). Do not infer schema or mount compatibility from an old PostgreSQL/ClickHouse version written in a guide.
 
-### What's in it
+## PostgreSQL
 
-* `users`, `roles`, RBAC bindings
-* `mcps`, `agents`, `skills`, `hooks`, `prompts`, `sandboxes`: registry metadata
-* `reviews`: submission review state
-* `feedback`, `ratings`
-* `alerts`, `alert_history`
-* `api_keys`
-* `audit_log` and related audit tables
+Agent releases, component pins, review state, and settings are relational data. API access uses JWTs; there is no current `api_keys` authentication table/workflow to provision as an onboarding step. Audit and security event storage belongs to the ClickHouse pipeline, not a blanket Postgres-only audit model.
 
-### Migrations
+Init distinguishes a fresh database from an existing versioned schema. It creates/stamps the appropriate fresh state or applies Alembic migrations to a recognized versioned state. A partial or unversioned existing database is refused rather than blindly stamped as current.
 
-Managed by Alembic. The server applies pending migrations automatically on startup. Migration files live in `observal-server/alembic/versions/`.
-
-For Docker Compose deployments, run the init service manually when needed:
-
-```bash
-docker compose -f docker/docker-compose.yml run --rm observal-init
-```
-
-The init service applies Alembic and ClickHouse migrations before API startup. `observal server migrate` moves data between deployments; it does not apply schema migrations.
-
-### Reset
-
-To wipe the registry and start over:
-
-```bash
-docker compose -f docker/docker-compose.yml down -v
-docker compose -f docker/docker-compose.yml up --build -d
-```
-
-The `-v` deletes all named volumes. Use only in dev.
-
----
+Stop/drain incompatible old API and worker writers before initialization for an upgrade. `observal server migrate` moves data through migration tooling; it is not the same operation as applying Alembic schema migrations. See [planned upgrades](/self-hosting/upgrades).
 
 ## ClickHouse
 
-### What's in it
+Session records, aggregates, checkpoints, layer snapshots/component mappings, component activity, audit/security events, and delivery records have different table engines and retention behavior. Use the application's query layer or inspect the actual engine before choosing `FINAL`, aggregation, or deletion semantics.
 
-Core tables:
+SQL schema files live in `observal-server/clickhouse/migrations/`; the runner records applied files. Alembic does not replace that runner. Init runs it after the PostgreSQL stage, before the API starts.
 
-| Table | Contents |
-| --- | --- |
-| `session_events` | Raw and parsed harness JSONL lines, token fields, tool fields, and session metadata |
-| `session_stats_agg` | Pre-aggregated session list and summary metrics from `session_events` |
-| `layer_snapshots` | Harness config snapshots used by version-aware insights |
-| `audit_log` | Audit events |
-| `security_events` | Security events for login, auth, and admin activity |
-| `webhook_deliveries` | Alert webhook delivery attempts and status |
+`data.retention_days` is the configured raw-session TTL policy, not the obsolete `DATA_RETENTION_DAYS` example. Scheduled `retention.*` controls and derived-evidence cleanup are separate. Policy and actual storage behavior can differ: source Compose skips the runtime TTL initializer through `SKIP_DDL_ON_STARTUP`, and the fresh rehearsal had no effective `session_events` TTL. Verify the table definition and [retention limits](/self-hosting/data-retention) before relying on expiration; a setting value or a schema export is not a restorable backup.
 
-### Deduplication and aggregates
+## Redis and authentication
 
-`session_events` and `layer_snapshots` use `ReplacingMergeTree` for idempotent ingest. `session_stats_agg` uses `AggregatingMergeTree` and is maintained by a materialized view.
+Redis is not only a disposable cache. Queue and token/revocation operations depend on it, and authentication can fail closed when it is unavailable. After loss/recovery, validate account access and pending work instead of promising every task requeues automatically.
 
-The API query layer handles the required `FINAL` or aggregate reads. If you query ClickHouse directly, match the table engine instead of assuming every table reads the same way.
+## Externalizing a database
 
-### Retention (TTL)
+An external endpoint needs compatible schema/version, network reachability, authentication, startup dependencies, health checks, and backup procedures. Changing `DATABASE_URL` or `CLICKHOUSE_URL` alone does not remove the original Compose dependency or make migrations safe.
 
-Controlled by `DATA_RETENTION_DAYS`:
+## Recovery
 
-* Default `90`: rows older than 90 days are TTL'd out.
-* `0`: retention disabled (disk grows without bound).
-* The server enforces a minimum of `7` on any non-zero value.
-
-TTL runs asynchronously. Disk space is reclaimed on the next merge; don't expect instant free-up.
-
-### Schema migrations
-
-ClickHouse schema changes are managed separately from Alembic. Alembic is only for Postgres.
-
-ClickHouse migration files live in:
-
-```bash
-observal-server/clickhouse/migrations/*.sql
-```
-
-The init container runs ClickHouse migrations after Alembic and before the API starts. The migration runner records applied files in `clickhouse_schema_migrations`.
-
-On existing installations that predate versioned ClickHouse migrations, the runner detects the existing baseline tables and stamps `001_baseline.sql` as applied instead of replaying the whole baseline.
-
-For local checks outside Docker, run the same runner from the server package:
-
-```bash
-cd observal-server
-python -m services.clickhouse.migrations
-```
-
-Do not put ClickHouse DDL in startup code. Add a new migration file instead.
-
-### Capacity planning
-
-Session record size depends on harness transcript detail and tool output size. Measure representative sessions, apply the configured raw-line retention window, and plan 2 to 3 times headroom for merges and replicas.
-
-### External ClickHouse
-
-For heavy workloads, run ClickHouse on a dedicated host outside the compose stack. Point the API at it:
-
-```
-CLICKHOUSE_URL=clickhouse://user:pass@external-clickhouse.example.com:8123/observal
-```
-
-Remove the `observal-clickhouse` service from `docker-compose.yml` or ignore it.
-
----
-
-## Backup
-
-See [Backup and restore](/self-hosting/backup-and-restore). Short version:
-
-* Postgres: `pg_dump` from a running container.
-* ClickHouse: snapshot the `chdata` volume, or use ClickHouse's native `BACKUP` command.
-* Both: back up before every upgrade.
-
-## Next
-
-→ [Authentication and SSO](/self-hosting/authentication)
+Use [backup and restore](/self-hosting/backup-and-restore) for matching relational data, application keys/encryption material, and ClickHouse evidence. Do not reset all volumes to recover a single store or repair a version mismatch.

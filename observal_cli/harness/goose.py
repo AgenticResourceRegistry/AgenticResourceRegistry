@@ -336,7 +336,7 @@ class GooseAdapter(BaseAdapter):
 
         return _patch_goose(dry_run)
 
-    def rewrite_hooks(self, content: dict, agent_id: str) -> dict:
+    def rewrite_hooks(self, content: dict, agent_id: str, *, path: Path | None = None) -> dict:
         """Point pulled session-push hooks at this machine's interpreter.
 
         The server cannot know the local interpreter path, whether it needs

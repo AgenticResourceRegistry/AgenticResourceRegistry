@@ -1,10 +1,11 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Insights LLM Setup"
 ---
 
-The insights engine uses [LiteLLM](https://docs.litellm.ai/docs/providers) to call LLMs for report generation. This means any LiteLLM-compatible provider works out of the box.
+The insights engine uses [LiteLLM](https://docs.litellm.ai/docs/providers) to call LLMs for report generation. Provider/model support, credentials, endpoint configuration, and server network access must be verified for the selected integration.
 
 ## Quick Start
 
@@ -13,13 +14,13 @@ The insights engine uses [LiteLLM](https://docs.litellm.ai/docs/providers) to ca
 3. Set **Sections Model** in `provider/model-name` format
 4. Set **Synthesis Model** and **Facets Model** for cost optimization
 
-That's it. Reports will generate on the next batch run.
+Saving settings is not successful generation. Reports require authorized delivered evidence and a successful scheduled/manual run. Follow [insights interpretation](/guides/interpret-insights) to request and inspect a bounded report; no next-batch completion guarantee is implied.
 
 ## Settings Reference
 
 | Setting | Purpose | Required |
 |---------|---------|----------|
-| API Key | Provider authentication token | Yes |
+| API Key | Provider authentication token | Depends on the integration; local/workload-identity paths differ |
 | API Base URL | Custom endpoint override | Only for Azure, Bedrock, Ollama |
 | Sections Model | Writes detailed narrative sections | Yes |
 | Synthesis Model | Aggregation and "At a Glance" | No (falls back to Sections) |
@@ -129,4 +130,4 @@ Common examples:
 
 **High costs**: reduce Facet Concurrency and Max Facet Calls, or use a cheaper Facets Model. The Facets Model runs once per session, so this is where most LLM spend happens.
 
-**Bedrock auth failures**: verify the API key hasn't expired (short-term keys last 12 hours max). Use long-term keys for production.
+**Bedrock auth failures**: verify the API key hasn't expired (short-term keys last 12 hours max). Use the credential lifetime, rotation, or workload-identity path approved for your deployment/integration; do not assume long-lived keys are required.

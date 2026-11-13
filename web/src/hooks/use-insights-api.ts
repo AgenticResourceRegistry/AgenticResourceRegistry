@@ -126,8 +126,8 @@ export function useComponentInsightReports(type: string, id: string, enabled: bo
 export function useGenerateComponentInsight() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { type: string; id: string; periodDays?: number; versionId?: string }) =>
-      insights.generateComponent(vars.type, vars.id, vars.periodDays, vars.versionId),
+    mutationFn: (vars: { type: string; id: string; periodDays?: number; versionId?: string; includeDiscoveryOptimization?: boolean }) =>
+      insights.generateComponent(vars.type, vars.id, vars.periodDays, vars.versionId, vars.includeDiscoveryOptimization),
     onSuccess: (_report, vars) => {
       void qc.invalidateQueries({ queryKey: ["insights", "component-reports", vars.type, vars.id] });
       toast.success("Component report queued");
@@ -205,8 +205,8 @@ export function useLegacyInsightReport(reportId: string) {
 export function useGenerateInsight() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { agentId: string; periodDays?: number; agentVersion?: string; comparisonAgentVersion?: string }) =>
-      insights.generate(vars.agentId, vars.periodDays, vars.agentVersion, vars.comparisonAgentVersion),
+    mutationFn: (vars: { agentId: string; periodDays?: number; agentVersion?: string; comparisonAgentVersion?: string; includeDiscoveryOptimization?: boolean }) =>
+      insights.generate(vars.agentId, vars.periodDays, vars.agentVersion, vars.comparisonAgentVersion, vars.includeDiscoveryOptimization),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["insights", "reports", vars.agentId] });
       toast.success("Insight report queued");

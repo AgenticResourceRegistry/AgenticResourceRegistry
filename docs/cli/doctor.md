@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal doctor"
 ---
@@ -136,6 +137,6 @@ See [Support bundles](/cli/support) for archive contents, redaction, offline beh
 
 ## Related
 
-* [`observal scan`](/cli/scan): read-only harness inventory
+* [`observal scan --inventory`](/cli/scan): read-only local harness evidence
 * [`observal agent pull`](/cli/pull): install a complete Agent
 * [Session tracking](/core-concepts/session-tracking): telemetry delivery architecture
