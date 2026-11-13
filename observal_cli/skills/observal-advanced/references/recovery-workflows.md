@@ -208,7 +208,20 @@ observal self downgrade --version 2.5.0 --force --output json
 observal self rollback --force --output json
 ```
 
-`-dev` versions are not on PyPI; `self upgrade --version X.Y.Z-dev.N` builds them from `git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main`. Without `--version`, a CLI logged in to a server that runs a `-dev` build targets that build instead of the latest release, because no release would pass the version gate. If the server cannot be reached, upgrade falls back to GitHub releases and says so. The 426 error and `observal auth login` print the exact command. If it fails, as a last resort install from source: `uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main` (dev) or `@v<version>` (release tag), then confirm `observal --version` equals the server version.
+The CLI syncs itself to the server's exact version at `auth login` and whenever a command finds a mismatch, then re-runs the command. A `version_mismatch` error (exit code 10) means the sync could not complete; its message says why:
+
+| Cause in the error | Fix |
+| --- | --- |
+| Synced, but not re-run (it had already sent a request or read standard input) | Check what the command already did, then run it again with the same input |
+| Managed by apt, dnf or brew | Update with that package manager, or install with `uv tool install observal-cli==<server version>` and remove the packaged copy |
+| Needs git | Install git with the command the error names, open a new terminal, rerun the original command |
+| No published commit declares the version | The server runs an unmerged build. Do not install a pull-request or fork commit; ask the server's administrator |
+| Installer failed, or still running in the background | Wait for the named PID or fix the cause, then `observal self upgrade` (or `downgrade`) `--version <server version> --force --output json` |
+| Still reports the old version | Another copy is first on PATH: `which -a observal` (`where observal` on Windows), remove the stale one |
+| Skipped in a hook, MCP server or worker | Run any `observal` command to sync, then restart the harness |
+| Version predates automatic sync | After the server's next upgrade, run `observal self upgrade --version <server version> --force` once |
+
+`-dev` versions are not on PyPI; `self upgrade --version X.Y.Z-dev.N` builds the server's `build_commit` (from `/api/v1/config/version`) when it is on `main` or a `release/*` branch. Without `--version`, a CLI logged in to a server that runs a `-dev` build targets that build instead of the latest release, because no release would pass the version gate. If the server cannot be reached, upgrade falls back to GitHub releases and says so. As a last resort: `uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@<build_commit>` (dev) or `@v<version>` (release), then confirm `observal --version` equals the server version.
 
 Standalone binary changes require a published checksum because JSON mode does not accept unsigned downloads interactively. Verify installed version after mutation.
 

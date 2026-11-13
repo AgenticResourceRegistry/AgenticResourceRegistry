@@ -232,29 +232,26 @@ def _finish_login(
 
 
 def _ensure_cli_matches_server(server_url: str) -> None:
-    """Block login when the CLI does not exactly match the server version.
+    """Put the CLI on the server's exact version before logging in.
 
-    The server is the source of truth. CLI pings the server to get its
-    version, then requires an exact match. Shows the correct upgrade or
-    downgrade command so the user knows exactly what to run.
+    The server is the source of truth. On a mismatch the CLI installs the
+    server's version over itself and re-runs this login, without asking. Login
+    is blocked, with the command to run, only when that sync cannot complete.
+    Other copies of the CLI on PATH are brought to the same version.
     """
     from packaging.version import InvalidVersion, Version
 
+    from observal_cli import auto_sync
     from observal_cli.version_check import get_current_version
 
     cli_ver_str = get_current_version()
     if cli_ver_str == "0.0.0":
         return
 
-    try:
-        r = httpx.get(f"{server_url}/api/v1/config/version", timeout=10)
-        r.raise_for_status()
-        server_ver = r.json().get("server_version")
-    except Exception:
+    build = auto_sync.fetch_server_build(server_url)
+    if build is None or build.version == "dev":
         return
-
-    if not server_ver or server_ver == "dev":
-        return
+    server_ver = build.version
 
     try:
         cli_version = Version(cli_ver_str)
@@ -263,20 +260,23 @@ def _ensure_cli_matches_server(server_url: str) -> None:
         return
 
     if cli_version == server_version:
+        auto_sync.sync_other_installs(server_ver, build.commit)
         return
 
-    from observal_cli.install_detector import upgrade_command
+    # Does not return when the sync succeeds: login restarts on the new CLI.
+    reason = auto_sync.sync_to_server(server_url)
+    if reason is None:
+        auto_sync.fail_synced_without_rerun(
+            server_ver, operation="Authenticate with Observal", resource=f"server {server_url}"
+        )
 
-    if cli_version > server_version:
-        install_command = f"observal self downgrade --version {server_ver}"
-    else:
-        install_command = upgrade_command(server_ver)
     fail(
         ErrorCategory.VERSION,
-        f"CLI version {cli_ver_str} does not match server version {server_ver}.",
+        f"CLI version {cli_ver_str} does not match server version {server_ver}. "
+        f"Automatic sync did not complete: {reason}",
         operation="Authenticate with Observal",
         resource=f"server {server_url}",
-        remediation=f"Run {install_command} and retry login.",
+        remediation=auto_sync.manual_fix(server_ver, cli_ver_str),
     )
 
 
@@ -452,6 +452,7 @@ def login(
                     json={"email": admin_email, "name": admin_name, "password": admin_password},
                     timeout=30,
                 )
+            client.record_completed_request(response)
             if response.status_code == 400 and "already initialized" in response.text.lower():
                 fail(
                     ErrorCategory.CONFLICT,
@@ -635,6 +636,7 @@ def logout(
                     headers={"Authorization": f"Bearer {access_token}"},
                     timeout=5,
                 )
+                client.record_completed_request(response)
                 revoked = response.is_success
             except httpx.HTTPError:
                 revoked = False
@@ -929,6 +931,7 @@ def _do_password_login(
                 json={"email": email, "password": password},
                 timeout=30,
             )
+        client.record_completed_request(response)
         _raise_for_status(
             response,
             path="/api/v1/auth/login",
@@ -999,6 +1002,8 @@ def _do_password_login(
             raise
         except httpx.TransportError as error:
             _fail_transport(error, operation="Complete required password change", resource=resource)
+        # A server-side write this command must not repeat: a later 426 syncs the CLI but does not re-run login.
+        client.record_completed_request()
         if not json_mode:
             rprint("[green]Password changed.[/green]")
 
@@ -1033,6 +1038,7 @@ def _do_device_flow_login(
                 json={"sso": direct_sso, "provider": provider},
                 timeout=10,
             )
+        client.record_completed_request(response)
         _raise_for_status(
             response,
             path="/api/v1/auth/device/authorize",
@@ -1143,6 +1149,7 @@ def _do_device_flow_login(
                 },
                 timeout=10,
             )
+            client.record_completed_request(response)
         except httpx.RequestError:
             if not json_mode:
                 rprint(".", end="", flush=True)
@@ -1847,6 +1854,7 @@ def _fetch_hooks_token(server_url: str, access_token: str) -> str:
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=10,
         )
+        client.record_completed_request(r)
         if r.status_code == 200:
             return r.json().get("access_token", access_token)
     except Exception:

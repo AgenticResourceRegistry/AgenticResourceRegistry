@@ -57,6 +57,7 @@ jobs:
             git checkout --detach "$RELEASE_TARGET"
 
             cd docker
+            export OBSERVAL_BUILD_COMMIT="$RELEASE_TARGET"
             docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build --remove-orphans
 
             # Phase 1: Wait for API container to be alive (bypasses nginx).

@@ -141,5 +141,5 @@ Mutation bodies accept any valid JSON value from a file or standard input, inclu
 - Permission: report the role or ownership requirement.
 - Not found: re-list and use the returned UUID or canonical name.
 - Conflict: inspect current state and server detail before choosing an action.
-- Version mismatch: use `observal-advanced` for CLI version recovery.
+- Version mismatch: the CLI syncs itself to the server and re-runs the command. If `version_mismatch` (exit code 10) still comes back, run its `remediation`; use `observal-advanced` if that fails.
 - Unavailable or not configured: stop. Use explicit local fallback only if the user requests it after the failure.

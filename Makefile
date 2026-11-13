@@ -57,6 +57,11 @@ hooks:  ## Install pre-commit hooks
 
 COMPOSE_FILES := -f docker-compose.yml
 OBSERVABILITY_COMPOSE_FILES := $(COMPOSE_FILES) -f docker-compose.observability.yml
+# Baked into the API image and reported by /api/v1/config/version, so the CLI can
+# build the exact source of a development server. Empty when the image's sources have
+# local changes: the build is then no published commit, and the CLI must not install
+# HEAD's clean source believing it is what the server runs.
+export OBSERVAL_BUILD_COMMIT ?= $(shell test -z "$$(git status --porcelain -- observal-server packages/observal-shared docker 2>/dev/null)" && git rev-parse HEAD 2>/dev/null)
 
 # Pre-create bind-mount sources so the Docker daemon doesn't create them root-owned
 # (breaks CLI writes to ~/.observal). On Linux, an ACL lets the container's appuser

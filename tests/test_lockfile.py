@@ -1110,14 +1110,14 @@ def test_marker_root_scan_failure_creates_empty_lockfile(isolated_lockfile, monk
     code.mkdir(parents=True)
     monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setattr(Path, "cwd", lambda: home)
-    real_glob = Path.glob
+    real_scandir = os.scandir
 
-    def denied_glob(path, pattern):
-        if path == code:
+    def denied_scandir(path):
+        if Path(path) == code:
             raise PermissionError("scan denied")
-        return real_glob(path, pattern)
+        return real_scandir(path)
 
-    monkeypatch.setattr(Path, "glob", denied_glob)
+    monkeypatch.setattr(lockfile.os, "scandir", denied_scandir)
     assert lockfile.migrate_agent_markers() == 0
     assert raw_lockfile(isolated_lockfile)["registries"] == {}
 
@@ -1137,3 +1137,112 @@ def test_marker_write_failure_keeps_source_marker(isolated_lockfile, monkeypatch
         lockfile.migrate_agent_markers()
     assert marker.exists()
     write.assert_called_once()
+
+
+def _tree(root: Path, width: int, depth: int) -> None:
+    """``width`` directories per level, ``depth`` levels deep."""
+    if depth == 0:
+        return
+    for index in range(width):
+        child = root / f"d{index}"
+        child.mkdir(parents=True, exist_ok=True)
+        _tree(child, width, depth - 1)
+
+
+def test_marker_scan_from_a_slow_directory_is_bounded_in_time(isolated_lockfile, monkeypatch, tmp_path):
+    """Live finding: from a OneDrive checkout seen through WSL, the recursive glob ran for over 20 minutes
+    before every command of a fresh install. Each listing here takes 20 ms, as on a slow share."""
+    import time
+
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "checkout"
+    _tree(project, width=6, depth=4)  # 1,554 directories
+    isolated_lockfile.config_dir.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(Path, "cwd", lambda: project)
+    monkeypatch.setattr(lockfile, "MARKER_SCAN_SECONDS", 0.5)
+    real_scandir = os.scandir
+
+    def slow_scandir(path):
+        time.sleep(0.02)
+        return real_scandir(path)
+
+    monkeypatch.setattr(lockfile.os, "scandir", slow_scandir)
+    started = time.monotonic()
+
+    assert lockfile.migrate_agent_markers() == 0
+    assert time.monotonic() - started < 2
+    # The migration completed (the lock file exists), so the scan never runs again.
+    assert raw_lockfile(isolated_lockfile)["registries"] == {}
+
+
+def test_marker_scan_lists_a_bounded_number_of_directories(isolated_lockfile, monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "checkout"
+    _tree(project, width=8, depth=3)  # 584 directories
+    isolated_lockfile.config_dir.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(Path, "cwd", lambda: project)
+    monkeypatch.setattr(lockfile, "MARKER_SCAN_DIRECTORIES", 50)
+    listed: list[str] = []
+    real_scandir = os.scandir
+
+    def counting_scandir(path):
+        listed.append(str(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(lockfile.os, "scandir", counting_scandir)
+
+    assert lockfile.migrate_agent_markers() == 0
+    assert len(listed) <= 50
+
+
+def test_marker_scan_skips_dependency_and_hidden_directories_but_finds_projects(
+    isolated_lockfile, monkeypatch, tmp_path
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    checkout = tmp_path / "checkout"
+    project = checkout / "apps" / "web"
+    (project / ".observal").mkdir(parents=True)
+    (project / ".observal" / "agent").write_text(json.dumps({"agent_id": "agent-1"}), encoding="utf-8")
+    for ignored in ("node_modules/pkg", ".git/objects", ".venv/lib", "venv/lib"):
+        (checkout / ignored / ".observal").mkdir(parents=True)
+        (checkout / ignored / ".observal" / "agent").write_text(json.dumps({"agent_id": "ignored"}), encoding="utf-8")
+    isolated_lockfile.config_dir.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(Path, "cwd", lambda: checkout)
+    listed: list[str] = []
+    real_scandir = os.scandir
+
+    def counting_scandir(path):
+        listed.append(Path(path).name)
+        return real_scandir(path)
+
+    monkeypatch.setattr(lockfile.os, "scandir", counting_scandir)
+
+    assert lockfile.migrate_agent_markers() == 1
+    assert not {"node_modules", ".git", ".venv", "venv", "objects", "pkg"} & set(listed)
+    agents = raw_lockfile(isolated_lockfile)["registries"][lockfile.current_registry_url()]["harnesses"]
+    assert [entry["id"] for entry in agents["claude-code"]["agents"]] == ["agent-1"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_marker_scan_does_not_follow_symlinks(isolated_lockfile, monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    elsewhere = tmp_path / "elsewhere" / "project"
+    (elsewhere / ".observal").mkdir(parents=True)
+    (elsewhere / ".observal" / "agent").write_text(json.dumps({"agent_id": "linked"}), encoding="utf-8")
+    # Nested one level, so the scan of the working directory's parent cannot reach `elsewhere` directly.
+    checkout = tmp_path / "work" / "checkout"
+    checkout.mkdir(parents=True)
+    (checkout / "link").symlink_to(elsewhere.parent, target_is_directory=True)
+    assert (checkout / "link" / "project" / ".observal" / "agent").is_file()  # reachable only through the link
+    isolated_lockfile.config_dir.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(Path, "cwd", lambda: checkout)
+
+    assert lockfile.migrate_agent_markers() == 0

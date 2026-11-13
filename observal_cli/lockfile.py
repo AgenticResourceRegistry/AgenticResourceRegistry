@@ -727,6 +727,68 @@ def compute_integrity(content: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Legacy markers sit in a project directory at most this many levels below a search root.
+MARKER_SCAN_DEPTH = 3
+# This scan runs ahead of a command, from whatever directory the user is in: a synced
+# folder, a network share, or WSL's view of a Windows drive, where every listing is slow.
+# It stops at whichever comes first and the migration still completes, so it never repeats.
+MARKER_SCAN_SECONDS = 1.0
+MARKER_SCAN_DIRECTORIES = 1000
+# Never a project root, and often huge.
+_MARKER_SCAN_SKIP = frozenset(
+    {"node_modules", "venv", "env", "__pycache__", "site-packages", "dist", "build", "target", "out", "vendor"}
+)
+
+
+def _find_agent_markers(roots: list[Path]) -> list[Path]:
+    """``.observal/agent`` files in directories at most ``MARKER_SCAN_DEPTH`` levels below ``roots``.
+
+    Breadth-first, so the nearest projects are found first; hidden and dependency
+    directories are not entered and symlinks are not followed. It reads at most
+    ``MARKER_SCAN_DIRECTORIES`` directories and stops after ``MARKER_SCAN_SECONDS``.
+    The recursive glob it replaces read every directory below each root before
+    applying the depth limit: minutes from a large tree on a slow filesystem.
+    """
+    import time
+    from collections import deque
+
+    deadline = time.monotonic() + MARKER_SCAN_SECONDS
+    queue = deque((root, 0) for root in roots)
+    seen: set[str] = set()
+    found: list[Path] = []
+    listed = 0
+    while queue:
+        if listed >= MARKER_SCAN_DIRECTORIES or time.monotonic() > deadline:
+            optic.info("legacy agent-marker scan stopped early: directories_listed={}", listed)
+            break
+        directory, depth = queue.popleft()
+        if str(directory) in seen:
+            continue
+        seen.add(str(directory))
+        try:
+            with os.scandir(directory) as entries:
+                listed += 1
+                for entry in entries:
+                    try:
+                        if not entry.is_dir(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+                    if entry.name == ".observal":
+                        marker = Path(entry.path) / "agent"
+                        if marker.is_file():
+                            found.append(marker)
+                    elif (
+                        depth < MARKER_SCAN_DEPTH
+                        and not entry.name.startswith(".")
+                        and entry.name not in _MARKER_SCAN_SKIP
+                    ):
+                        queue.append((Path(entry.path), depth + 1))
+        except OSError:
+            continue
+    return found
+
+
 def migrate_agent_markers() -> int:
     """Migrate existing .observal/agent markers to the lock file.
 
@@ -769,20 +831,11 @@ def migrate_agent_markers() -> int:
         if cwd.parent != home and cwd.parent.exists():
             search_roots.append(cwd.parent)
 
-    for root in search_roots:
+    for marker in _find_agent_markers(search_roots):
         try:
-            # Look up to 3 levels deep for .observal/agent files
-            for marker in root.glob("**/.observal/agent"):
-                # Limit depth
-                rel = marker.relative_to(root)
-                if len(rel.parts) > 5:  # .observal/agent = 2 parts + up to 3 dir levels
-                    continue
-                try:
-                    marker_data = json.loads(marker.read_text())
-                    markers_found.append((marker.parent.parent, marker_data))
-                except (json.JSONDecodeError, OSError, UnicodeError):
-                    continue
-        except (OSError, PermissionError):
+            marker_data = json.loads(marker.read_text())
+            markers_found.append((marker.parent.parent, marker_data))
+        except (json.JSONDecodeError, OSError, UnicodeError):
             continue
 
     if not markers_found:
