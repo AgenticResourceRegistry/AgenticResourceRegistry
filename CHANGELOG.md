@@ -8,6 +8,7 @@
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Meghana Inti <meghanainti149@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Deepesh Kumar <akadeepesh1710@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Changelog
@@ -30,6 +31,7 @@ All notable changes to this project will be documented in this file.
 - add an authenticated JSON API escape hatch and mixed Registry component bulk submission
 - standardize dedicated list JSON output with `items`, `total`, `page`, and `page_size`
 - make mutation retry behavior explicit and reserve automatic transient retries for reads
+- show durations in the trace detail page and admin audit log as `850 ms`, `1.23 s` or `2m 5s`, instead of `180.0s` for long sessions or raw milliseconds (#2160)
 
 ### Breaking changes
 
