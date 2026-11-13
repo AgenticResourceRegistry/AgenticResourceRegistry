@@ -24,11 +24,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from typing import Any, TextIO
 
 from loguru import logger as optic
 
-from observal_cli.delegation import service
+from observal_cli.delegation import progress, service, tasks
 from observal_cli.errors import CliError, _boundary_active
 
 SERVER_NAME = "observal-agents"
@@ -36,6 +37,8 @@ SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 # Below common MCP client tool timeouts (Codex: 60 s); the task keeps running and get_task follows it.
 DEFAULT_WAIT_SECONDS = 45
 MAX_WAIT_SECONDS = 50
+# How often a followed task publishes new child output; well inside the tool timeout.
+PROGRESS_SLICE_SECONDS = 2.0
 
 TOOLS: list[dict] = [
     {
@@ -114,6 +117,7 @@ class Server:
         self.harness = harness
         self.parent_id = parent_id
         self.out = out
+        self._progress_seen: dict[str, int] = {}
 
     # ── Transport ────────────────────────────────────────────────────────
 
@@ -163,14 +167,19 @@ class Server:
         elif method == "tools/list":
             result = {"tools": TOOLS}
         elif method == "tools/call":
-            result = self.call_tool(str(params.get("name") or ""), params.get("arguments") or {})
+            result = self.call_tool(
+                str(params.get("name") or ""),
+                params.get("arguments") or {},
+                _progress_token(params),
+            )
         else:
             return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method not found: {method}"}}
         return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
-    def call_tool(self, name: str, arguments: dict) -> dict:
+    def call_tool(self, name: str, arguments: dict, progress_token: Any = None) -> dict:
+        """Run one tool and wrap its outcome, so a failure is reported and not raised."""
         try:
-            text = self._run_tool(name, arguments if isinstance(arguments, dict) else {})
+            text = self._run_tool(name, arguments if isinstance(arguments, dict) else {}, progress_token)
             return {"content": [{"type": "text", "text": text}], "isError": False}
         except service.DelegationError as exc:
             return _tool_error(exc.message)
@@ -180,7 +189,11 @@ class Server:
             optic.exception("observal-agents tool {} failed", name)
             return _tool_error(f"{name} failed: {type(exc).__name__}. Details are in the Observal log.")
 
-    def _run_tool(self, name: str, args: dict) -> str:
+    def _run_tool(self, name: str, args: dict, progress_token: Any = None) -> str:
+        """Run one tool by name and return the text the client reads."""
+        # The wait budget covers the whole call, not just the part spent following:
+        # the client's timeout started before find_agents or start were answered.
+        started = time.monotonic()
         wait = _bounded(args.get("wait_seconds"), DEFAULT_WAIT_SECONDS if name == "delegate" else 0)
         if name == "find_agents":
             agents = service.find_agents(str(args.get("task") or ""), limit=_bounded(args.get("limit"), 5, 1, 10))
@@ -188,8 +201,10 @@ class Server:
                 return "No approved agent in the registry matches that task. Do it yourself."
             return json.dumps({"agents": agents}, indent=2, ensure_ascii=False)
         if name == "delegate":
+            # A client that asked for progress keeps the wait here, so output can be forwarded as it arrives.
+            wait_here = 0 if progress_token is not None else wait
             if args.get("task_id"):
-                task = service.reply(str(args["task_id"]), str(args.get("message") or ""), wait_seconds=wait)
+                task = service.reply(str(args["task_id"]), str(args.get("message") or ""), wait_seconds=wait_here)
             else:
                 agent = str(args.get("agent") or "").strip()
                 if not agent:
@@ -200,14 +215,67 @@ class Server:
                     harness=str(args.get("harness") or "").strip() or None,
                     parent_harness=self.harness,
                     parent_agent_id=self.parent_id,
-                    wait_seconds=wait,
+                    wait_seconds=wait_here,
                 )
-            return service.summarize(task)
+            return service.summarize(self._with_progress(task, wait, progress_token, started=started))
         if name == "get_task":
-            return service.summarize(service.wait(str(args.get("task_id") or ""), wait))
+            task_id = str(args.get("task_id") or "")
+            if progress_token is None:
+                return service.summarize(service.wait(task_id, wait))
+            return service.summarize(self._with_progress(service.get(task_id), wait, progress_token, started=started))
         if name == "cancel_task":
             return service.summarize(service.cancel(str(args.get("task_id") or "")))
         raise service.DelegationError(f"Unknown tool: {name}")
+
+    def _with_progress(self, task: dict, seconds: int, token: Any, *, started: float | None = None) -> dict:
+        """Follow a task, forwarding its child's new output as MCP progress notifications.
+
+        The progress token is optional in the protocol: without one this is the
+        plain wait, so a client that does not ask pays nothing. ``started`` is the
+        monotonic time the tool call began, so answering the call can come out of
+        the same budget instead of pushing the reply past the client's timeout.
+
+        The cursor lives on the server, one per task: a client polls get_task every
+        few seconds, and each call must forward only what it has not already sent
+        rather than replaying the whole backlog of a long run.
+        """
+        if token is None:
+            return task
+        deadline = (time.monotonic() if started is None else started) + seconds
+        task_id = task["id"]
+        seen = self._progress_seen.get(task_id, 0)
+        while True:
+            final = tasks.is_final(task)
+            events, seen = progress.drain(task_id, seen, rounds=None if final else progress.DRAIN_ROUNDS)
+            self._progress_seen[task_id] = seen
+            for event in events:
+                self.notify_progress(token, event)
+            if final or time.monotonic() >= deadline:
+                return task
+            # Never sleep past the budget this tool call promised the client.
+            remaining = deadline - time.monotonic()
+            task = service.wait(task["id"], min(PROGRESS_SLICE_SECONDS, max(0.0, remaining)))
+
+    def notify_progress(self, token: Any, event: dict) -> None:
+        """Send one notifications/progress for a sidecar event."""
+        text = f"{event.get('kind') or 'line'}: {event.get('text') or ''}"
+        self.send(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/progress",
+                "params": {
+                    "progressToken": token,
+                    "progress": int(event.get("seq") or 0),
+                    "message": text[:400],
+                },
+            }
+        )
+
+
+def _progress_token(params: dict) -> Any:
+    """The client's progress token, when it asked to be kept informed."""
+    meta = params.get("_meta")
+    return meta.get("progressToken") if isinstance(meta, dict) else None
 
 
 def _tool_error(message: str) -> dict:
@@ -223,6 +291,7 @@ def _bounded(value: Any, default: int, low: int = 0, high: int = MAX_WAIT_SECOND
 
 
 def _cli_version() -> str:
+    """The installed CLI version, for the initialize response."""
     try:
         from importlib.metadata import version
 

@@ -30,6 +30,7 @@ All notable changes to this project will be documented in this file.
 - add an authenticated JSON API escape hatch and mixed Registry component bulk submission
 - standardize dedicated list JSON output with `items`, `total`, `page`, and `page_size`
 - make mutation retry behavior explicit and reserve automatic transient retries for reads
+- stream a delegated agent's output as it happens: `observal delegate run --follow` (or `-f`) mirrors the child's stdout and stderr to the terminal as they arrive, and the `observal-agents` MCP server forwards `notifications/progress` when the caller supplies a `progressToken`
 
 ### Breaking changes
 
