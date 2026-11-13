@@ -45,7 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticReso
 bash install-observal.sh --version 1.17.0
 ```
 
-Without a version selector, the installer defaults to the latest release. The shown invocation explicitly selects **1.17.0**; `/usr/local/bin` is the default installation directory. Use `--bin-dir` for a reviewed writable location.
+Without a version selector, the installer defaults to the latest release. The shown invocation explicitly selects **1.17.0**; `/usr/local/bin` is the default installation directory. Use `--bin-dir` for a reviewed writable location. A missing `--bin-dir` directory is created, using `sudo` only if needed.
 
   </Tab>
   <Tab title="Windows">
