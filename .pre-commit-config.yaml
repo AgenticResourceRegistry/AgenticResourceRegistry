@@ -38,7 +38,7 @@ repos:
         args: [--maxkb=500]
       - id: check-merge-conflict
       - id: detect-private-key
-        exclude: ^tests/test_secrets_redactor\.py$|^tests/test_saml\.py$
+        exclude: ^tests/test_secrets_redactor\.py$|^tests/test_saml\.py$|^tests/test_pr_review_files\.py$
       - id: no-commit-to-branch
         args: [--branch, main]
         stages: [pre-commit]
@@ -80,4 +80,5 @@ repos:
     hooks:
       - id: hadolint-docker
         stages: [pre-commit]
+        exclude: \.dockerignore$  # Dockerfile-specific ignore files are not Dockerfiles
         args: [--ignore, DL3008, --ignore, DL3013]
