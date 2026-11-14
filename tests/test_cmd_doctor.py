@@ -87,6 +87,27 @@ def read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+STALE_COPILOT_CLI_ENTRY = {
+    "type": "command",
+    "bash": "python3 -m observal_cli.hooks.copilot_cli_hook",
+    "timeoutSec": 5,
+}
+USER_COPILOT_CLI_ENTRY = {"type": "command", "bash": "echo mine", "timeoutSec": 5}
+
+
+def write_stale_copilot_cli_settings(path: Path) -> None:
+    write_json(
+        path,
+        {
+            "theme": "dark",
+            "hooks": {
+                "preToolUse": [STALE_COPILOT_CLI_ENTRY, USER_COPILOT_CLI_ENTRY],
+                "postToolUse": [STALE_COPILOT_CLI_ENTRY],
+            },
+        },
+    )
+
+
 @pytest.fixture
 def goose_home(isolated_home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Pin goose's environment-derived directories to the isolated home."""
@@ -274,6 +295,16 @@ class TestChecks:
         _check_copilot_cli([], warnings)
 
         assert any("Copilot CLI session push hooks not installed" in warning for warning in warnings)
+
+    def test_copilot_cli_warns_about_stale_user_config_hooks(self, tmp_path: Path):
+        assert _patch_copilot_cli(dry_run=False) is True
+        write_stale_copilot_cli_settings(tmp_path / ".copilot/settings.json")
+        warnings: list[str] = []
+
+        _check_copilot_cli([], warnings)
+
+        assert any("settings.json has 2 Observal hook entries" in warning for warning in warnings)
+        assert not any("not installed" in warning for warning in warnings)
 
     def test_opencode_warns_for_missing_plugin(self, tmp_path: Path):
         (tmp_path / ".config/opencode").mkdir(parents=True)
@@ -591,6 +622,19 @@ class TestPatchFunctions:
         )
         assert _patch_copilot_cli(dry_run=False) is False
 
+    def test_patch_copilot_cli_removes_stale_user_config_hooks(self, tmp_path: Path):
+        assert _patch_copilot_cli(dry_run=False) is True
+        settings_path = tmp_path / ".copilot/settings.json"
+        write_stale_copilot_cli_settings(settings_path)
+
+        assert _patch_copilot_cli(dry_run=True) is True
+        assert STALE_COPILOT_CLI_ENTRY in read_json(settings_path)["hooks"]["preToolUse"]
+
+        assert _patch_copilot_cli(dry_run=False) is True
+
+        assert read_json(settings_path) == {"theme": "dark", "hooks": {"preToolUse": [USER_COPILOT_CLI_ENTRY]}}
+        assert _patch_copilot_cli(dry_run=False) is False
+
     def test_patch_opencode_writes_current_plugin(self, tmp_path: Path):
         assert _patch_opencode(dry_run=False) is True
 
@@ -755,6 +799,33 @@ class TestCleanupFunctions:
         assert _cleanup_copilot_cli(dry_run=False) is True
 
         assert not hooks_path.exists()
+
+    def test_cleanup_copilot_cli_removes_stale_user_config_hooks(self, tmp_path: Path):
+        settings_path = tmp_path / ".copilot/settings.json"
+        config_path = tmp_path / ".copilot/config.json"
+        write_stale_copilot_cli_settings(settings_path)
+        write_json(config_path, {"hooks": {"sessionStart": [STALE_COPILOT_CLI_ENTRY]}})
+
+        assert _cleanup_copilot_cli(dry_run=True) is True
+        assert STALE_COPILOT_CLI_ENTRY in read_json(settings_path)["hooks"]["postToolUse"]
+
+        assert _cleanup_copilot_cli(dry_run=False) is True
+
+        assert read_json(settings_path) == {"theme": "dark", "hooks": {"preToolUse": [USER_COPILOT_CLI_ENTRY]}}
+        assert read_json(config_path) == {}
+        assert _cleanup_copilot_cli(dry_run=False) is False
+
+    def test_cleanup_copilot_cli_keeps_user_hooks_in_hook_file(self, tmp_path: Path):
+        assert _patch_copilot_cli(dry_run=False) is True
+        hooks_path = tmp_path / ".copilot/hooks/observal.json"
+        data = read_json(hooks_path)
+        data["hooks"]["preToolUse"].append(USER_COPILOT_CLI_ENTRY)
+        write_json(hooks_path, data)
+
+        assert _cleanup_copilot_cli(dry_run=False) is True
+
+        remaining = read_json(hooks_path)
+        assert remaining["hooks"] == {"preToolUse": [USER_COPILOT_CLI_ENTRY]}
 
     def test_cleanup_opencode_removes_plugin(self, tmp_path: Path):
         plugin_path = tmp_path / ".config/opencode/plugins/observal-plugin.ts"
