@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2025 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Sagar Kumar <sagar0206mahran@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 name: E2E Frontend
@@ -97,7 +98,7 @@ jobs:
           # This runner builds a fresh disposable stack; never point this job
           # at a long-lived server when enabling the draft-creating tests.
           OBSERVAL_ISOLATED_STACK: 'true'
-        run: pnpm exec playwright test frontend-flows skill-folder
+        run: pnpm exec playwright test frontend-flows skill-folder trace-id-copy
 
       - name: Show API errors on failure
         if: failure()
