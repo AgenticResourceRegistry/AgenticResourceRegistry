@@ -50,18 +50,23 @@ class CopilotCliAdapter(BaseHarnessAdapter):
 
     @property
     def harness_name(self) -> str:
+        """Return the unique harness identifier string."""
         return "copilot-cli"
 
     def format_hook_install_snippet(self, event: str, handler_type: str, command: str, timeout: int | None) -> dict:
+        """Format a hook snippet entry for installation in Copilot CLI hook configuration."""
         return {"hooks": {event: [{"command": command}]}}
 
     def format_hook_component(self, command: str) -> dict:
+        """Format an individual hook component definition for Copilot CLI."""
         return {"type": "command", "command": command}
 
     def emits_prompt_files(self) -> bool:
+        """Indicate whether this adapter emits prompt markdown files."""
         return True
 
     def format_mcp_config(self, ctx: McpConfigContext) -> dict:
+        """Format MCP server configuration mapping for Copilot CLI."""
         if ctx.url:
             entry = {**ctx.standard_entry(), "tools": ["*"]}
         else:
@@ -69,6 +74,7 @@ class CopilotCliAdapter(BaseHarnessAdapter):
         return {"mcpServers": {ctx.name: entry}}
 
     def format_config(self, ctx: ConfigContext) -> dict:
+        """Format all configuration files required for Copilot CLI agent execution."""
         safe_name = ctx.safe_name
         mcp_configs = ctx.mcp_configs
         rules_content = ctx.rules_content
@@ -80,7 +86,7 @@ class CopilotCliAdapter(BaseHarnessAdapter):
         for name, config in mcp_configs.items():
             entry = dict(config)
             entry["type"] = config.get("type", "sse") if config.get("url") else "stdio"
-            entry["tools"] = ["*"]
+            entry["tools"] = config.get("tools") or ["*"]
             copilot_cli_configs[name] = entry
 
         copilot_cli_spec = HARNESS_REGISTRY["copilot-cli"]
@@ -99,6 +105,9 @@ class CopilotCliAdapter(BaseHarnessAdapter):
             for mcp_name in copilot_cli_configs:
                 frontmatter_lines.append(f"  {mcp_name}:")
                 cfg = copilot_cli_configs[mcp_name]
+                tools = cfg.get("tools") or ["*"]
+                tools_str = ", ".join(f"'{t}'" for t in tools)
+                frontmatter_lines.append(f"    tools: [{tools_str}]")
                 if cfg.get("type"):
                     frontmatter_lines.append(f"    type: {cfg['type']}")
                 # Quoted scalars: a command, argument or URL may contain ": ", "#",
