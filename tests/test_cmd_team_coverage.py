@@ -11,7 +11,7 @@ from unittest.mock import Mock, call
 
 import pytest
 import typer
-from click import Group
+from click.utils import strip_ansi
 from typer.main import get_command
 from typer.testing import CliRunner
 
@@ -422,16 +422,16 @@ def test_invite_create_sends_optional_fields_only_when_supplied(cli):
 @pytest.mark.parametrize(
     ("options", "message"),
     [
-        (["--expires-days", "0"], "0 is not in the range 1<=x<=365"),
-        (["--expires-days", "366"], "366 is not in the range 1<=x<=365"),
-        (["--max-uses", "0"], "0 is not in the range 1<=x<=10000"),
+        (["--expires-days", "0"], "Invalid value for '--expires-days'"),
+        (["--expires-days", "366"], "Invalid value for '--expires-days'"),
+        (["--max-uses", "0"], "Invalid value for '--max-uses'"),
     ],
 )
 def test_invite_numeric_validation_cancels_before_resolution(cli, options, message):
     result = runner.invoke(team.team_app, ["invite", "create", "platform", *options])
 
     assert result.exit_code == 2
-    assert message in result.output
+    assert message in strip_ansi(result.output)
     cli.client.resolve_team_id.assert_not_called()
     cli.client.post.assert_not_called()
 
@@ -869,7 +869,7 @@ def test_every_team_leaf_has_shared_output_option():
 
     def leaves(group):
         for child in group.commands.values():
-            if isinstance(child, Group):
+            if isinstance(getattr(child, "commands", None), dict):
                 yield from leaves(child)
             else:
                 yield child

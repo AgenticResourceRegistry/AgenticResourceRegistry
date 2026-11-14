@@ -18,24 +18,35 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
+import click
 import httpx
 import pytest
 import typer
-from click import Group
 from typer.testing import CliRunner
 
 from observal_cli import client
 from observal_cli.error_context import OPERATION_LABELS, RESOURCE_LABELS
 from observal_cli.errors import (
+    ABORT_ERRORS,
+    EXIT_ERRORS,
+    USAGE_ERRORS,
     CliError,
     ErrorCategory,
     ErrorHandlingGroup,
     ExitCode,
+    _param_choices,
     _uses_json_output,
     _uses_machine_output,
     emit_error,
+    fail,
 )
 from observal_cli.main import app
+
+
+def _is_group(command) -> bool:
+    """Detect a command group whether Typer uses Click or its bundled copy (Typer 0.26+)."""
+    return isinstance(getattr(command, "commands", None), dict)
+
 
 _MISSING = object()
 
@@ -491,7 +502,7 @@ def test_every_leaf_command_exposes_json_machine_output():
     leaves = []
 
     def walk(command):
-        if isinstance(command, Group):
+        if _is_group(command):
             for child in command.commands.values():
                 walk(child)
         else:
@@ -502,8 +513,7 @@ def test_every_leaf_command_exposes_json_machine_output():
     for command in leaves:
         output = next((parameter for parameter in command.params if parameter.name == "output"), None)
         assert output is not None, command.name
-        choices = {getattr(choice, "value", choice) for choice in getattr(output.type, "choices", ())}
-        assert "json" in choices, command.name
+        assert "json" in _param_choices(output), command.name
 
 
 def test_json_error_mode_distinguishes_format_from_file_destination():
@@ -531,12 +541,32 @@ def test_json_error_mode_supports_typer_choice_without_click_inheritance():
     output = next(
         parameter for parameter in root.commands["auth"].commands["login"].params if parameter.name == "output"
     )
-    original = output.type
-    output.type = SimpleNamespace(choices=("table", "json"))
-    try:
+    with patch.object(output, "type", SimpleNamespace(choices=("table", "json")), create=True):
         assert _uses_json_output(root, ("auth", "login", "--output", "json")) is True
-    finally:
-        output.type = original
+
+
+@pytest.mark.parametrize(
+    "param",
+    [
+        # Typer 0.28 and earlier: a Click type carrying the choices.
+        SimpleNamespace(name="output", type=SimpleNamespace(choices=("table", "json"))),
+        # Typer 0.29+: no `type` attribute; enum members on the type descriptor.
+        SimpleNamespace(
+            name="output",
+            type_descriptor=SimpleNamespace(
+                choices=(SimpleNamespace(value="table"), SimpleNamespace(value="json")),
+            ),
+        ),
+    ],
+    ids=["typer-0.28-type", "typer-0.29-type-descriptor"],
+)
+def test_param_choices_reads_every_typer_parameter_shape(param):
+    assert _param_choices(param) == {"table", "json"}
+
+
+def test_param_choices_is_empty_for_a_free_text_option():
+    assert _param_choices(SimpleNamespace(name="output", type=SimpleNamespace())) == set()
+    assert _param_choices(SimpleNamespace(name="output")) == set()
 
 
 def test_root_boundary_emits_json_usage_error_to_stderr():
@@ -741,9 +771,9 @@ def test_root_group_enforces_error_contract_for_all_commands():
     executable = []
 
     def walk(command):
-        if not isinstance(command, Group) or command.invoke_without_command:
+        if not _is_group(command) or command.invoke_without_command:
             executable.append(command)
-        if isinstance(command, Group):
+        if _is_group(command):
             for child in command.commands.values():
                 walk(child)
 
@@ -1501,3 +1531,78 @@ def test_server_supports_uses_server_string_when_version_parsing_fails(monkeypat
 
     assert client.server_supports("example-feature") is False
     available.assert_called_once_with("example-feature", "development")
+
+
+def _boundary_app(command):
+    """A two-command app behind the root error boundary, so Typer keeps the subcommand."""
+    boundary = typer.Typer(cls=ErrorHandlingGroup)
+    boundary.command("go")(command)
+    boundary.command("other")(lambda: None)
+    return boundary
+
+
+def _ids(classes):
+    return [f"{cls.__module__}.{cls.__name__}" for cls in classes]
+
+
+def test_compat_tuples_cover_click_and_the_installed_typer():
+    assert click.exceptions.Exit in EXIT_ERRORS and typer.Exit in EXIT_ERRORS
+    assert click.exceptions.Abort in ABORT_ERRORS and typer.Abort in ABORT_ERRORS
+    assert click.exceptions.UsageError in USAGE_ERRORS
+    assert issubclass(typer.BadParameter, USAGE_ERRORS[-1])
+
+
+@pytest.mark.parametrize("abort", ABORT_ERRORS, ids=_ids(ABORT_ERRORS))
+def test_boundary_reports_abort_from_click_or_typer(abort):
+    def go():
+        raise abort()
+
+    result = CliRunner().invoke(_boundary_app(go), ["go"])
+
+    assert result.exit_code == 1
+    assert "Aborted!" in result.output
+    assert "unexpected" not in result.output
+
+
+def test_boundary_reports_a_declined_confirmation_as_aborted():
+    def go():
+        typer.confirm("Proceed?", abort=True)
+
+    result = CliRunner().invoke(_boundary_app(go), ["go"], input="n\n")
+
+    assert result.exit_code == 1
+    assert "Aborted!" in result.output
+    assert "unexpected" not in result.output
+
+
+@pytest.mark.parametrize("exit_error", EXIT_ERRORS, ids=_ids(EXIT_ERRORS))
+def test_boundary_keeps_the_code_of_a_bare_exit_from_click_or_typer(exit_error):
+    def go():
+        raise exit_error(3)
+
+    assert CliRunner().invoke(_boundary_app(go), ["go"]).exit_code == 3
+
+
+@pytest.mark.parametrize("bad_parameter", [click.BadParameter, typer.BadParameter], ids=["click", "typer"])
+def test_boundary_reports_bad_parameters_from_click_or_typer_as_usage(bad_parameter):
+    def go():
+        raise bad_parameter("must be positive")
+
+    result = CliRunner().invoke(_boundary_app(go), ["go"])
+
+    assert result.exit_code == ExitCode.USAGE
+    assert "Error (usage)" in result.output
+
+
+def test_cli_error_exits_with_its_contract_code_without_the_root_group():
+    """Sub-apps run on their own (tests, helper entry points) still honor the exit contract."""
+    sub = typer.Typer()
+
+    @sub.command("go")
+    def go():
+        fail(ErrorCategory.VALIDATION, "Bad input.", operation="Run go")
+
+    sub.command("other")(lambda: None)
+
+    assert isinstance(CliError(ErrorCategory.VALIDATION, "x", operation="y"), typer.Exit)
+    assert CliRunner().invoke(sub, ["go"]).exit_code == ExitCode.VALIDATION

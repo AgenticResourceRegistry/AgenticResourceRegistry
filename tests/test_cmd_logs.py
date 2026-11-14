@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, call
 import httpx
 import pytest
 import typer
+from click.utils import strip_ansi
 from rich.text import Text
 from typer.testing import CliRunner
 
@@ -677,7 +678,7 @@ def test_user_facing_ops_logs_route_uses_defaults_and_returns_success(
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [
-        ([f"{LONG_OPTION}lines", "many"], "is not a valid integer"),
+        ([f"{LONG_OPTION}lines", "many"], "Invalid value for '--lines'"),
         ([f"{LONG_OPTION}output", "yaml"], "is not one of"),
     ],
 )
@@ -689,7 +690,7 @@ def test_cli_validation_exits_two_before_constructing_console(
     result = runner.invoke(logs.logs_app, arguments)
 
     assert result.exit_code == 2, result.output
-    assert message in result.output
+    assert message in strip_ansi(result.output)
     boundaries.console_factory.assert_not_called()
 
 
