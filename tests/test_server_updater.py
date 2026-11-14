@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Faeka Ansari <97490463+fykaa@users.noreply.github.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Isolated behavioral tests for the standalone server binary updater."""
@@ -237,7 +238,9 @@ def test_network_update_writes_cache_and_honors_quiet(
     expected = (
         []
         if quiet
-        else ["[yellow]Update available:[/yellow] v1.0.0 → [bold]v2.0.0[/bold]. Run: [cyan]observal self update[/cyan]"]
+        else [
+            "[yellow]Update available:[/yellow] v1.0.0 → [bold]v2.0.0[/bold]. Run: [cyan]observal self upgrade[/cyan]"
+        ]
     )
     assert runtime.console.messages == expected
 
