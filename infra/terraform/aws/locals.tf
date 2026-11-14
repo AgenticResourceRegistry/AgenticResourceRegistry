@@ -16,10 +16,10 @@ locals {
   # BYO-VPC: when vpc_id is provided, use existing resources; otherwise create new ones.
   should_create_vpc = var.vpc_id == null
 
-  vpc_id             = local.should_create_vpc ? aws_vpc.main[0].id : var.vpc_id
+  vpc_id             = local.should_create_vpc ? module.vpc[0].vpc_id : var.vpc_id
   vpc_cidr           = data.aws_vpc.vpc.cidr_block
-  private_subnet_ids = local.should_create_vpc ? aws_subnet.private[*].id : var.private_subnet_ids
-  public_subnet_ids  = local.should_create_vpc ? aws_subnet.public[*].id : coalesce(var.public_subnet_ids, var.private_subnet_ids)
+  private_subnet_ids = local.should_create_vpc ? module.vpc[0].private_subnet_ids : var.private_subnet_ids
+  public_subnet_ids  = local.should_create_vpc ? module.vpc[0].public_subnet_ids : coalesce(var.public_subnet_ids, var.private_subnet_ids)
 
   # BYO Security Groups
   create_alb_sg = var.alb_security_group_id == null

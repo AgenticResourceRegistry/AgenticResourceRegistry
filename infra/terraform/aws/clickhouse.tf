@@ -90,7 +90,7 @@ resource "aws_instance" "data_host" {
   tags = { Name = "${local.name}-data-host" }
 
   depends_on = [
-    aws_nat_gateway.main,
+    module.vpc,
     aws_ssm_parameter.app,
   ]
 }
