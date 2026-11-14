@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import re
-from unicodedata import decimal
 
 from .base import (
     basic_event,
@@ -353,7 +352,7 @@ def _shell_command(text: str) -> str:
     """Read JSON shell arguments or retain the raw freeform command."""
     try:
         args = json.loads(text)
-    except (ValueError, RecursionError):
+    except ValueError:
         return text
     if not isinstance(args, dict):
         return text
@@ -395,7 +394,7 @@ def _meta_tool_call(payload: dict) -> dict:
         return meta_tool_call(name, str_field(payload, "call_id"), {}, "subagent")
     try:
         args = json.loads(text) if text else {}
-    except (ValueError, RecursionError):
+    except ValueError:
         args = {}
     return meta_tool_call(name, str_field(payload, "call_id"), args if isinstance(args, dict) else {})
 
@@ -463,14 +462,13 @@ def _tool_error(payload: dict, text: str) -> bool:
         return True
     try:
         output = json.loads(text)
-    except (ValueError, RecursionError):
+    except ValueError:
         output = None
     if isinstance(output, dict) and (
         output.get("error") or output.get("success") is False or output.get("status") in ("error", "failed")
     ):
         return True
-    # Preserve signed/zero-padded Unicode digits matched by \d without unbounded int conversion.
-    return any(any(decimal(digit) for digit in code.lstrip("-")) for code in _EXIT_CODE.findall(text))
+    return any(int(code) != 0 for code in _EXIT_CODE.findall(text))
 
 
 def transcript_rows(rows: list[dict]) -> list[dict]:
@@ -506,7 +504,7 @@ def transcript_rows(rows: list[dict]) -> list[dict]:
                 else:
                     try:
                         value = json.loads(text)
-                    except (ValueError, RecursionError):
+                    except ValueError:
                         value = text
                     if isinstance(value, dict) and "command" in value and not isinstance(value["command"], str):
                         value = {**value, "command": _shell_command(json.dumps(value))}
