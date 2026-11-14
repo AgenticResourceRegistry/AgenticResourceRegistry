@@ -19,9 +19,10 @@ from .scope import SessionKey
 
 logger = structlog.get_logger(__name__)
 
-FACET_VERSION = 1
-# Kiro and Codex normalized transcripts use v2; other harness caches remain eligible.
-_FACET_VERSIONS = {"kiro": 2, "codex": 2}
+FACET_VERSION = 3
+# Bounded excerpt semantics changed for all harnesses; invalidate old facets.
+_FACET_VERSIONS: dict[str, int] = {}
+
 # Five binds per key; leave ample room below asyncpg's 32,767-argument limit.
 _FACET_LOOKUP_BATCH_SIZE = 1000
 
@@ -116,13 +117,41 @@ async def extract_facets(
         return {}
 
 
-async def store_facets(session: SessionKey, agent_id: str, facets: dict, db) -> None:
+async def store_facets(session: SessionKey, agent_id: str, facets: dict, db, *, source_hash: str = "") -> None:
     """Persist only to the row for this exact scoped session."""
     import uuid as _uuid
 
     from sqlalchemy import select
 
     model = get_facets_model()
+    facets = {**facets, "_source_hash": source_hash} if source_hash else facets
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    if isinstance(db, AsyncSession) and db.get_bind().dialect.name in {"postgresql", "sqlite"}:
+        # The unique key deliberately excludes facet_version. Concurrent reports
+        # replace the disposable cache row, never race a select-then-insert.
+        if db.get_bind().dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+        values = dict(
+            project_id=session.project_id,
+            user_id=session.user_id,
+            harness=session.harness,
+            session_id=session.session_id,
+            agent_id=_uuid.UUID(agent_id) if agent_id else None,
+            facet_version=facet_version(session.harness),
+            facets=facets,
+            extracted_at=datetime.now(UTC),
+        )
+        statement = insert(model).values(**values)
+        statement = statement.on_conflict_do_update(
+            index_elements=[model.project_id, model.user_id, model.harness, model.session_id],
+            set_={key: values[key] for key in ("facets", "facet_version", "extracted_at")},
+        )
+        await db.execute(statement)
+        await db.flush()
+        return
     stmt = select(model).where(
         model.project_id == session.project_id,
         model.user_id == session.user_id,
@@ -149,7 +178,9 @@ async def store_facets(session: SessionKey, agent_id: str, facets: dict, db) -> 
     await db.flush()
 
 
-async def load_cached_facets_batch(sessions: list[SessionKey], db) -> dict[SessionKey, dict]:
+async def load_cached_facets_batch(
+    sessions: list[SessionKey], db, *, source_hashes: dict[SessionKey, str] | None = None
+) -> dict[SessionKey, dict]:
     """Legacy unscoped cache entries are intentionally never eligible for reuse."""
     if not sessions:
         return {}
@@ -170,7 +201,15 @@ async def load_cached_facets_batch(sessions: list[SessionKey], db) -> dict[Sessi
             {
                 SessionKey(row.project_id, row.user_id, row.harness, row.session_id): row.facets
                 for row in result.scalars().all()
-                if row.facets and row.facet_version == facet_version(row.harness)
+                if row.facets
+                and row.facet_version == facet_version(row.harness)
+                and (
+                    source_hashes is None
+                    or row.facets.get("_source_hash")
+                    == source_hashes.get(
+                        SessionKey(row.project_id, row.user_id, row.harness, row.session_id), "missing"
+                    )
+                )
             }
         )
     return cached

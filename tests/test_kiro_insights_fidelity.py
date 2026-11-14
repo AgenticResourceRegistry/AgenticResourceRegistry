@@ -152,14 +152,14 @@ async def test_only_kiro_old_facets_are_ineligible(monkeypatch):
         SimpleNamespace(
             project_id="p", user_id="u", harness=h, session_id="s", facet_version=version, facets={"version": version}
         )
-        for h, version in [("kiro", 1), ("kiro", 2), ("claude-code", 1)]
+        for h, version in [("kiro", 2), ("kiro", 3), ("claude-code", 3)]
     ]
     db = SimpleNamespace(
         execute=AsyncMock(return_value=SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: rows)))
     )
     result = await facets.load_cached_facets_batch(keys, db)
-    assert result[keys[0]] == {"version": 2}
-    assert result[keys[1]] == {"version": 1}
+    assert result[keys[0]] == {"version": 3}
+    assert result[keys[1]] == {"version": 3}
 
 
 def test_native_v3_fixture_matches_record_counts_without_tool_message_inflation():
@@ -196,7 +196,7 @@ async def test_old_facet_row_is_updated_not_duplicated_when_version_changes(monk
         flush=AsyncMock(),
     )
     await facets.store_facets(SessionKey("p", "u", "kiro", "s"), "", {"new": True}, db)
-    assert existing.facet_version == 2 and existing.facets == {"new": True}
+    assert existing.facet_version == 3 and existing.facets == {"new": True}
     db.add.assert_not_called()
     assert "facet_version" not in str(db.execute.await_args.args[0].whereclause)
 

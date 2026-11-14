@@ -123,7 +123,7 @@ async def test_repeated_turns_and_successful_tool_output_are_not_false_errors(mo
 
 @pytest.mark.asyncio
 async def test_store_upgrades_existing_scoped_codex_facet(monkeypatch):
-    """Upgrade the unique existing row rather than inserting a duplicate for version two."""
+    """Upgrade the unique existing row rather than inserting a duplicate for the current version."""
     from models.insight_session_facets import InsightSessionFacets
     from services.insights import facets
 
@@ -135,21 +135,21 @@ async def test_store_upgrades_existing_scoped_codex_facet(monkeypatch):
     )
     monkeypatch.setattr(facets, "get_facets_model", lambda: InsightSessionFacets)
     await facets.store_facets(SessionKey("default", "user", "codex", "session"), "", {"new": True}, db)
-    assert row.facet_version == 2 and row.facets == {"new": True}
+    assert row.facet_version == 3 and row.facets == {"new": True}
 
 
-def test_codex_upgrade_preserves_existing_kiro_facet_version():
-    """A Codex transcript fix must not discard cached work for unchanged harnesses."""
+def test_bounded_excerpts_move_every_harness_to_facet_version_three():
+    """Bounded excerpt semantics changed for all harnesses, superseding the Codex and Kiro v2 caches."""
     from services.insights.facets import facet_version
 
-    assert facet_version("codex") == 2
-    assert facet_version("kiro") == 2  # Canonical #2032 is already on main.
-    assert facet_version("pi") == 1
+    assert facet_version("codex") == 3
+    assert facet_version("kiro") == 3
+    assert facet_version("pi") == 3
 
 
 @pytest.mark.asyncio
-async def test_cached_codex_version_one_is_not_reused(monkeypatch):
-    """Stale Codex facets are excluded while an unchanged harness cache stays eligible."""
+async def test_cached_codex_version_two_is_not_reused(monkeypatch):
+    """A Codex facet cached at v2 is rebuilt while a current-version facet stays eligible."""
     from models.insight_session_facets import InsightSessionFacets
     from services.insights import facets
 
@@ -161,10 +161,10 @@ async def test_cached_codex_version_one_is_not_reused(monkeypatch):
             user_id=k.user_id,
             harness=k.harness,
             session_id=k.session_id,
-            facet_version=1,
+            facet_version=version,
             facets={"old": True},
         )
-        for k in [codex, control]
+        for k, version in [(codex, 2), (control, 3)]
     ]
     db = SimpleNamespace(
         execute=AsyncMock(return_value=SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: rows)))
@@ -172,7 +172,7 @@ async def test_cached_codex_version_one_is_not_reused(monkeypatch):
     monkeypatch.setattr(facets, "get_facets_model", lambda: InsightSessionFacets)
     assert await facets.load_cached_facets_batch([codex, control], db) == {control: {"old": True}}
     params = db.execute.await_args.args[0].compile().params
-    assert [(*codex.as_tuple(), 2), (*control.as_tuple(), 1)] in params.values()
+    assert [(*codex.as_tuple(), 3), (*control.as_tuple(), 3)] in params.values()
 
 
 @pytest.mark.asyncio

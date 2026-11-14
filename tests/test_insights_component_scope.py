@@ -92,7 +92,7 @@ async def test_facets_cache_is_scoped_not_agent_or_bare_session(monkeypatch):
             user_id="alice",
             harness="pi",
             session_id="same-id",
-            facet_version=1,
+            facet_version=3,
             facets={"goal": "Alice's goal"},
         )
     ]

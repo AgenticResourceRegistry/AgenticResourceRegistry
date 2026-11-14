@@ -234,7 +234,7 @@ async def test_extract_facets_batch_never_uses_db_concurrently(monkeypatch):
         await asyncio.sleep(0)
         return {"brief_summary": session_id}
 
-    async def store(session, _agent_id: str, _facets: dict, db) -> None:
+    async def store(session, _agent_id: str, _facets: dict, db, **_kwargs) -> None:
         await db.store(session.session_id)
 
     monkeypatch.setattr(generator, "extract_facets", extract)

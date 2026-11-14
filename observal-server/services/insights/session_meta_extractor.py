@@ -16,6 +16,7 @@ buildSessionMeta functions, adapted for cross-user server-side execution.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime
@@ -351,6 +352,7 @@ def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "
 
     return {
         "session_id": session_id,
+        "source_hash": hashlib.sha256("\n".join(raw_lines).encode()).hexdigest(),
         "project_path": project_path,
         "start_time": start_time or "",
         "end_time": end_time or "",
