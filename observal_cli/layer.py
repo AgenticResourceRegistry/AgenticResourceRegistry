@@ -232,6 +232,7 @@ HARNESS_LAYER_CONFIGS: dict[str, dict[str, list[tuple[str, list[str]]]]] = {
                     "hooks.json",
                 ],
             ),
+            ("~", [".agents/skills/*/SKILL.md"]),
         ],
         "project": [
             (
@@ -530,7 +531,7 @@ PI_MCP_VERIFIER = "observal-pi-mcp-verification-v1"
 
 SKILL_VERIFICATION_PATH = "observal:skill-verification"
 # Harnesses whose skill presence (and location) is bound into the layer identity.
-SKILL_VERIFICATION_HARNESSES = frozenset({"pi", "claude-code"})
+SKILL_VERIFICATION_HARNESSES = frozenset({"pi", "claude-code", "codex"})
 
 
 HOOK_VERIFICATION_PATH = "observal:hook-verification"
@@ -1077,8 +1078,14 @@ def _extract_pinned_versions(lockfile_data: dict, project_dir: str | None = None
     return {"schema_version": 2, "agents": agents, "standalone": standalone}
 
 
-def mcp_entry_fingerprint(entry: dict) -> str:
-    """Keep only locally hashed structural MCP settings, never credential fields."""
+def mcp_entry_fingerprint(entry: dict, *, harness: str | None = None) -> str:
+    """Hash structural settings without exposing credentials in a receipt.
+
+    Preserve historical fingerprints for other harnesses and Codex entries
+    without an explicit stdio env. Older Codex receipts with non-empty env were
+    not bound to its values: they must fail verification, not be grandfathered
+    into a measured presence cohort after an env-only change.
+    """
     if not isinstance(entry, dict):
         raise ValueError("Invalid MCP configuration")
     from urllib.parse import urlsplit, urlunsplit
@@ -1095,6 +1102,21 @@ def mcp_entry_fingerprint(entry: dict) -> str:
             authority = f"{authority}:{parsed.port}"
         safe_url = urlunsplit((parsed.scheme, authority, parsed.path, "", ""))
     structure = [entry.get("command", ""), entry.get("args", []), safe_url, entry.get("type", "")]
+    if "http_headers" in entry:
+        # Codex native HTTP credentials affect the pin. Existing URL-only
+        # receipts in other harnesses retain their historical fingerprints.
+        structure.append(entry["http_headers"])
+    if harness == "codex" and "url" not in entry:
+        env = entry.get("env", {})
+        if not isinstance(env, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in env.items()):
+            raise ValueError("Invalid Codex stdio environment")
+        if env:
+            # A tagged digest avoids serializing env values into pins while
+            # differentiating them from every historical unbound stdio receipt.
+            env_digest = hashlib.sha256(
+                json.dumps(env, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            structure.append(["codex-stdio-env-v1", env_digest])
     return (
         "sha256-"
         + hashlib.sha256(
@@ -1131,7 +1153,7 @@ def verify_installed_mcp(
     if status != "verified" or entry is None:
         return status, None
     try:
-        fingerprint = mcp_entry_fingerprint(entry)
+        fingerprint = mcp_entry_fingerprint(entry, harness=harness)
     except (ValueError, TypeError):
         return "unverified", None
     if expected is not None and expected != fingerprint:

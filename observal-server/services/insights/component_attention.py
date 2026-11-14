@@ -86,10 +86,22 @@ def _mcp_rules(summary: dict, coverage: dict) -> list[dict]:
 
 
 def _skill_rules(summary: dict, coverage: dict) -> list[dict]:
+    # A Codex selection is not a confirmed load, and a partial mixed cohort
+    # cannot supply a load denominator. Never turn null/unsupported loads into
+    # zero or issue a load-rate recommendation from selection-only sessions.
+    loads, loaded = summary.get("confirmed_loads"), summary.get("loaded_sessions")
+    if (
+        loads is None
+        or loaded is None
+        or any(
+            reason in coverage.get("reasons", ())
+            for reason in ("load_not_recorded_on_some_harnesses", "load_not_recorded_on_some_scopes")
+        )
+    ):
+        return []
     items = []
-    processed = _processed(coverage)
-    loads = int(summary["confirmed_loads"])
-    available, loaded = summary["available_sessions"], int(summary["loaded_sessions"])
+    processed = int(coverage.get("usage_rate_denominator_sessions", _processed(coverage)) or 0)
+    available = summary["available_sessions"]
     if processed >= MIN_SESSIONS_FOR_RATE and loads == 0 and coverage["attribution_state"] == "no_observed_skill_use":
         items.append(
             _item(

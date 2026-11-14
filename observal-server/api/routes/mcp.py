@@ -371,16 +371,23 @@ async def install_mcp(
         await commit_or_name_conflict(db, "listing")
 
     from api.routes.config import derive_endpoints
+    from services.harness.codex import CodexHttpEnvUnsupportedError
 
     endpoints = await derive_endpoints(request)
-    snippet = generate_config(
-        source,
-        req.harness,
-        observal_url=endpoints["api"],
-        env_values=req.env_values,
-        header_values=req.header_values,
-        local_name=req.local_name,
-    )
+    try:
+        snippet = generate_config(
+            source,
+            req.harness,
+            observal_url=endpoints["api"],
+            env_values=req.env_values,
+            header_values=req.header_values,
+            local_name=req.local_name,
+        )
+    except CodexHttpEnvUnsupportedError as exc:
+        # Do not expose environment/header values from the request.
+        raise HTTPException(
+            422, "Codex HTTP MCP requires explicit header values; stdio env values are unsupported"
+        ) from exc
     from services.shared.utils import sanitize_name
 
     return McpInstallResponse(

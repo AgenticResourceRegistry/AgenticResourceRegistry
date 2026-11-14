@@ -179,14 +179,25 @@ def normalize_snapshot(pinned_versions: object, drift: object) -> list[Occurrenc
     # One installed alias cannot prove two different registry identities in the
     # same harness and scope. A duplicated claim about the *same* identity is fine.
     alias_claims: dict[tuple[str, str, str, str], set[tuple[str, str]]] = defaultdict(set)
+    mcp_scopes: dict[tuple[str, str], set[str]] = defaultdict(set)
     for record in records:
         if record["component_type"] in ("mcp", "skill") and record["local_name"]:
             alias_claims[record["component_type"], record["harness"], record["scope"], record["local_name"]].add(
                 (record["raw_listing_id"], record["raw_version"])
             )
+            if record["component_type"] == "mcp":
+                mcp_scopes[record["harness"], record["local_name"]].add(record["scope"])
     for record in records:
         claim = (record["component_type"], record["harness"], record["scope"], record["local_name"])
-        if record["component_type"] in ("mcp", "skill") and len(alias_claims.get(claim, ())) > 1:
+        if record["component_type"] in ("mcp", "skill") and (
+            len(alias_claims.get(claim, ())) > 1
+            or (
+                record["component_type"] == "mcp"
+                and len(mcp_scopes.get((record["harness"], record["local_name"]), ())) > 1
+            )
+        ):
+            # Distinct scopes can both carry a valid receipt, but the native
+            # server alias alone cannot establish which setting won at runtime.
             record["verification_status"] = "unverified"
 
     # The published identity is derived from immutable pin fields, not from the

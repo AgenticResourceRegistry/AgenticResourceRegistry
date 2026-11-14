@@ -82,6 +82,33 @@ async def test_skill_report_states_what_the_evidence_does_and_does_not_show(monk
     assert "calls" not in content["coverage"]
 
 
+def test_codex_report_copy_covers_user_scope_and_unknown_offers():
+    summary = _summary(1, 2) | {
+        "harness_distribution": {"codex": 2},
+        "loaded_sessions": None,
+        "confirmed_loads": None,
+        "load_attempts": None,
+        "invoked_sessions": 1,
+        "invocations": 1,
+    }
+    coverage = build_skill_coverage(
+        {"present_sessions": 2, "present_users": 1},
+        {
+            "supported_present_sessions": 2,
+            "projection_complete_sessions": 2,
+            "usage_measurable_sessions": 1,
+            "scope_unmeasurable_sessions": 1,
+            "observed_sessions": 1,
+        },
+        13398,
+    ).model_dump(mode="json")
+    narrative = component_report.generate_skill_sections(summary, coverage)["summary"]
+    assert "native Codex skill selection" in narrative
+    assert "project-skill" not in narrative
+    assert "Other installs or unverified offers remain unknown" in narrative
+    assert "not a separately confirmed skill load" in narrative
+
+
 @pytest.mark.asyncio
 async def test_unsupported_component_types_are_rejected():
     report = _report()

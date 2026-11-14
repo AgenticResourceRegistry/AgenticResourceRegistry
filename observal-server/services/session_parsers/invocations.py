@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from observal_shared.harness_registry import HARNESS_REGISTRY
 
 from .claude_code_invocations import ClaudeCodeInvocationExtractor
+from .codex_mcp_invocations import CodexMCPInvocationExtractor
 from .invocation_types import InvocationExtraction, InvocationExtractor
 from .pi_invocations import PiInvocationExtractor
 
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 
 _EXTRACTORS: dict[str, InvocationExtractor] = {
     "claude-code": ClaudeCodeInvocationExtractor(),
+    "codex": CodexMCPInvocationExtractor(),
     "pi": PiInvocationExtractor(),
 }
 

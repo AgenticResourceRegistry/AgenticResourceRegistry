@@ -183,6 +183,10 @@ _SESSIONS = (
            p.candidate_count AS candidate_count, p.attributed_count AS attributed_count,
            p.collision_count AS collision_count, p.unmatched_count AS unmatched_count,
            p.unknown_result_count AS unknown_result_count,
+           (projection_state = 'complete' AND (ifNull(a.calls, 0) > 0
+               OR (ifNull(p.candidate_count, 0) = ifNull(p.attributed_count, 0)
+                   AND ifNull(p.collision_count, 0) = 0 AND ifNull(p.unmatched_count, 0) = 0
+                   AND ifNull(p.unknown_result_count, 0) = 0))) AS usage_measurable,
            a.calls AS calls, a.successes AS successes, a.errors AS errors, a.unknowns AS unknowns,
            a.refs AS refs
 """
@@ -193,6 +197,7 @@ _SUMMARY = (
     """SELECT countIf(supported) AS supported_present_sessions,
            countIf(NOT supported) AS unsupported_present_sessions,
            countIf(projection_state = 'complete') AS projection_complete_sessions,
+           countIf(usage_measurable) AS usage_measurable_sessions,
            countIf(projection_state = 'pending') AS projection_pending_sessions,
            countIf(projection_state = 'failed') AS projection_failed_sessions,
            countIf(projection_state = 'stale') AS projection_stale_sessions,
@@ -424,6 +429,7 @@ def _normalize_sessions(page: list[dict]) -> list[dict]:
                 "last_event_time": str(row["last_event_time"]),
                 "projection_state": row["projection_state"],
                 "source_state": row["source_state"],
+                "usage_measurable": bool(row.get("usage_measurable")) if complete else False,
                 "observed_calls": calls,
                 "result_states": {
                     "success": int(row.get("successes") or 0) if complete else 0,

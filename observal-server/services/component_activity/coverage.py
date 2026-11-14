@@ -4,9 +4,9 @@
 """Shared D§7 coverage contract for component observability and Insights.
 
 Pure functions only: callers supply exact counts from the presence and
-activity queries. A usage-rate denominator only counts present sessions on a
-supported harness that have a complete, current activity publication, so an
-unmapped/unsupported/pending session is never read as "no use".
+activity queries. A usage-rate denominator counts present sessions on a supported harness with
+complete, current evidence and no unattributed native call when claiming zero.
+An unmapped, ambiguous or incomplete session is never read as "no use".
 """
 
 from __future__ import annotations
@@ -36,7 +36,9 @@ def build_coverage(presence: dict, activity: dict, publication_version: int) -> 
         publication_version=publication_version,
     )
     calls = CallCoverage(**{key: _int(activity, key) for key in CallCoverage.model_fields})
-    denominator = projection.projection_complete_sessions
+    # A complete publication can still contain a colliding/unmatched native
+    # call. Its lack of attributed calls is not a measured zero for a listing.
+    denominator = _int(activity, "usage_measurable_sessions")
     observed = _int(activity, "observed_sessions")
 
     reasons: list[str] = []

@@ -1171,6 +1171,30 @@ class TestInstallMcp:
         assert isinstance(db.add.call_args.args[0], McpDownload)
 
     @pytest.mark.asyncio
+    async def test_codex_http_env_values_fail_without_echoing_secret(self, monkeypatch):
+        db = _db()
+        listing = _listing(
+            command=None,
+            args=[],
+            url="https://mcp.example.test/mcp",
+            transport="streamable-http",
+            environment_variables=[{"name": "TOKEN", "required": True}],
+        )
+        monkeypatch.setattr(mcp, "resolve_visible_listing", AsyncMock(return_value=listing))
+        monkeypatch.setattr(mcp, "commit_or_name_conflict", AsyncMock())
+        monkeypatch.setattr("api.routes.config.derive_endpoints", AsyncMock(return_value={"api": "https://api.test"}))
+        with pytest.raises(HTTPException) as exc:
+            await mcp.install_mcp(
+                str(LISTING_ID),
+                McpInstallRequest(harness="codex", env_values={"TOKEN": "PRIVATE_TEST_TOKEN"}),
+                MagicMock(),
+                db,
+                _user(),
+            )
+        assert exc.value.status_code == 422
+        assert "PRIVATE_TEST_TOKEN" not in str(exc.value)
+
+    @pytest.mark.asyncio
     async def test_config_failure_occurs_after_usage_commit(self, monkeypatch):
         db = _db()
         listing = _listing()
