@@ -13,6 +13,7 @@ import threading
 import uuid
 from contextvars import copy_context
 from datetime import UTC, datetime
+from http import HTTPStatus
 
 from loguru import logger as optic
 
@@ -59,7 +60,7 @@ def emit_cli_audit(
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=5.0,
             )
-            if resp.status_code >= 400:
+            if resp.status_code >= HTTPStatus.BAD_REQUEST:
                 optic.debug("cli audit POST failed: status={}", resp.status_code)
         except Exception as e:
             from observal_cli.client import _pull_reporting_secrets
