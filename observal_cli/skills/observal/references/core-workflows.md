@@ -141,5 +141,5 @@ Mutation bodies accept any valid JSON value from a file or standard input, inclu
 - Permission: report the role or ownership requirement.
 - Not found: re-list and use the returned UUID or canonical name.
 - Conflict: inspect current state and server detail before choosing an action.
-- Version mismatch: use `observal-advanced` for CLI version recovery.
+- Version mismatch: normally you never see this. The CLI syncs itself to the connected server's exact version, upgrade or downgrade, at `auth login` and whenever a command finds a mismatch, then re-runs that command. It does not ask. A command that had already sent a request or read piped input is synced but not re-run: check what it already changed, then run it again. A development server (`X.Y.Z-dev.N`) is matched by building the CLI from that server's source commit, which takes about a minute; in JSON mode the sync is silent, so wait for the command to finish rather than retrying. If `error.category: version_mismatch` (exit code 10) still comes back, the sync could not complete and the error says why: run the command in its `remediation`, confirm `observal --version` equals the server version, and retry once. Use `observal-advanced` if that fails.
 - Unavailable or not configured: stop. Use explicit local fallback only if the user requests it after the failure.

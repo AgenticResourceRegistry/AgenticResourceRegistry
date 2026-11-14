@@ -732,3 +732,151 @@ def test_windows_argv_and_copilot_cli_profile_launchers_are_isolated(tmp_path, m
     for command in (launch, [entry["command"], *entry["args"]]):
         result = subprocess.run(command, cwd=project, env=hostile, capture_output=True, check=False)
         assert _genuine(result), (command, result.stderr[-300:])
+
+
+# ── CLI auto-sync re-runs and probes ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize("installed", [True, False])
+def test_auto_sync_rerun_ignores_a_hostile_project_and_pythonpath(tmp_path, monkeypatch, installed):
+    """Regression: after syncing, a CLI started as `python -m` re-ran itself with a bare interpreter, so the
+    working directory or an inherited PYTHONPATH supplied its own `observal_cli` (PR 2204 audit, P1)."""
+    from observal_cli import auto_sync
+    from observal_cli.install_detector import InstallInfo, InstallMethod
+
+    python = _installed_python(tmp_path) if installed else sys.executable
+    project = _hostile_project(tmp_path / "project")
+    captured = {}
+
+    def execve(_path, argv, env):
+        captured.update(argv=argv, env=env)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(launcher, "importable_in_isolation", lambda: installed)
+    monkeypatch.setattr(sys, "executable", python)
+    monkeypatch.setattr(sys, "argv", [str(project / "observal_cli" / "__main__.py"), "auth", "whoami"])
+    monkeypatch.setenv("PYTHONPATH", str(project))  # inherited, as from a hostile shell
+    monkeypatch.setattr(auto_sync.os, "execve", execve)
+    with pytest.raises(SystemExit):
+        auto_sync._rerun(InstallInfo(InstallMethod.PIP, Path(python), True, "pip"), "1.0.0")
+    monkeypatch.undo()
+
+    argv, env = captured["argv"], captured["env"]
+    assert argv[:2] == [python, "-I" if installed else "-P"]
+    result = subprocess.run(_as_probe(argv), cwd=project, env=env, capture_output=True, check=False)
+    assert _genuine(result), (result.stdout, result.stderr[-200:])
+
+
+def test_auto_sync_rerun_from_an_isolated_parent_stays_isolated(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from observal_cli import auto_sync
+    from observal_cli.install_detector import InstallInfo, InstallMethod
+
+    python = _installed_python(tmp_path)
+    captured = {}
+
+    def execve(_path, argv, env):
+        captured.update(argv=argv)
+        raise SystemExit(0)
+
+    # The parent itself runs with -I, as installed hooks and MCP servers do: no probe, the child is -I too.
+    monkeypatch.setattr(launcher, "sys", SimpleNamespace(flags=SimpleNamespace(isolated=1), executable=python))
+    monkeypatch.setattr(launcher, "importable_in_isolation", lambda: pytest.fail("probed from an isolated parent"))
+    monkeypatch.setattr(sys, "argv", ["/x/observal_cli/main.py", "auth", "whoami"])
+    monkeypatch.setattr(auto_sync.os, "execve", execve)
+    with pytest.raises(SystemExit):
+        auto_sync._rerun(InstallInfo(InstallMethod.PIP, Path(python), True, "pip"), "1.0.0")
+
+    assert captured["argv"][:4] == [python, "-I", "-m", "observal_cli.main"]
+
+
+def test_auto_sync_version_and_start_probes_ignore_a_hostile_project(tmp_path):
+    from observal_cli.install_detector import version_argv
+
+    python = _installed_python(tmp_path)
+    project = _hostile_project(tmp_path / "project")
+    probe = version_argv(Path(python))
+    assert probe[:4] == [python, "-I", "-m", "observal_cli.main"]
+    # The start check runs the same interpreter and options with a command in place of --version.
+    result = _run_hostile(shlex.join(_as_probe(probe)), project)
+    assert _genuine(result), (result.stdout, result.stderr[-200:])
+
+
+def _installed_cli(tmp_path: Path) -> tuple[str, Path]:
+    """A venv whose ``bin/observal`` console script runs the probe, importing the CLI and its dependencies
+    from the venv's own site-packages, like a real install. Returns the interpreter and the script."""
+    python = _installed_python(tmp_path)
+    site = subprocess.run(
+        [python, "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    # This test run's dependencies (typer, httpx, ...), after the venv's own entries, as installed packages are.
+    dependencies = [entry for entry in sys.path if entry.endswith(("site-packages", "dist-packages"))]
+    (Path(site) / "observal_test_dependencies.pth").write_text("".join(f"{path}\n" for path in dependencies))
+    script = Path(python).parent / "observal"
+    script.write_text(f"#!{python}\nimport runpy\nrunpy.run_module({_PROBE!r}, run_name='__main__')\n")
+    script.chmod(0o755)
+    return python, script
+
+
+def test_auto_sync_rerun_of_an_isolated_console_script_stays_isolated(tmp_path):
+    """Regression (PR 2204 deep audit, finding 1): started as ``python -I <console script>``, the sync re-ran
+    the script directly with the inherited PYTHONPATH, so a hostile package replaced the CLI just installed.
+
+    Real processes throughout: an isolated parent, the real install detection, and the real exec."""
+    python, script = _installed_cli(tmp_path)
+    project = _hostile_project(tmp_path / "project")
+    hostile = {**_clean_env(tmp_path), "PYTHONPATH": str(project)}
+    # The hostility is real: the script run with that environment imports the project's package.
+    assert b"HIJACKED" in subprocess.run([str(script)], cwd=project, env=hostile, capture_output=True).stdout
+
+    driver = tmp_path / "driver" / "sync_then_rerun.py"
+    driver.parent.mkdir()
+    driver.write_text(
+        "import sys\n"
+        f"sys.argv = [{str(script)!r}, '--agent', 'x']\n"
+        "assert sys.flags.isolated\n"
+        "from observal_cli import auto_sync, install_detector\n"
+        "auto_sync._rerun(install_detector.detect(), '1.0.0')\n"
+    )
+    result = subprocess.run([python, "-I", str(driver)], cwd=project, env=hostile, capture_output=True, check=False)
+
+    assert b"HIJACKED" not in result.stdout, result.stdout
+    # The installed probe ran, given the original arguments (it rejects an incomplete command line).
+    assert b"usage" in result.stderr, result.stderr[-300:]
+
+
+def test_auto_sync_probes_of_a_console_script_ignore_an_inherited_pythonpath(tmp_path, monkeypatch):
+    """The version and start checks report on the installed copy, never on a package from PYTHONPATH."""
+    from observal_cli import auto_sync
+    from observal_cli.install_detector import installed_version
+
+    _python, script = _installed_cli(tmp_path)
+    project = tmp_path / "project"
+    fake = project / "observal_cli"
+    fake.mkdir(parents=True)
+    (fake / "__init__.py").write_text("")
+    # A fake that would pass both checks: right version, starts cleanly.
+    (fake / "hook_gate.py").write_text("print('observal 9.9.9')")
+    monkeypatch.setenv("PYTHONPATH", str(project))
+    hijacked = subprocess.run([str(script), "--version"], capture_output=True, text=True, check=False)
+    assert hijacked.stdout.strip() == "observal 9.9.9"
+
+    # The installed probe prints usage and exits 1: no version, and it does not start cleanly.
+    assert installed_version(script) is None
+    assert auto_sync._start_failure_at(script) is not None
+
+
+def test_script_env_drops_pythonpath_and_mirrors_an_isolated_parent(monkeypatch):
+    base = {"PATH": "/usr/bin", "PYTHONPATH": "/project", "PYTHONUSERBASE": "/u", "PYTHONIOENCODING": "utf-8"}
+
+    monkeypatch.setattr(launcher, "sys", SimpleNamespace(flags=SimpleNamespace(isolated=0)))
+    # An ordinary parent keeps its settings, except a PYTHONPATH that would replace the installed CLI.
+    assert launcher.script_env(base) == {"PATH": "/usr/bin", "PYTHONUSERBASE": "/u", "PYTHONIOENCODING": "utf-8"}
+
+    monkeypatch.setattr(launcher, "sys", SimpleNamespace(flags=SimpleNamespace(isolated=1)))
+    # `-I` ignored every PYTHON* variable and user site-packages; so does its child.
+    assert launcher.script_env(base) == {"PATH": "/usr/bin", "PYTHONNOUSERSITE": "1"}

@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 _server_version_cache: str | None = None
 # Whether version enforcement has already run this session
 _version_enforced: bool = False
+# Requests this process completed; a command is re-run after a CLI sync only at zero.
+_requests_completed: int = 0
 
 # Subcommands exempt from version enforcement (user needs these to fix mismatches)
 _EXEMPT_SUBCOMMANDS = frozenset({"self", "server"})
@@ -56,6 +58,20 @@ for _http_logger_name in (
     logging.getLogger(_http_logger_name).addFilter(_PullHTTPXFilter())
 
 
+def record_completed_request(response: httpx.Response | None = None) -> None:
+    """Count a request that reached the server, including ones sent outside this module.
+
+    A CLI sync re-runs the command only while this is zero, so nothing the
+    command already changed on the server is sent twice. A 426 is not counted:
+    the version gate rejects the request before any route runs, so it changed
+    nothing, and it is the response that triggers the sync.
+    """
+    global _requests_completed
+    if response is not None and response.status_code == 426:
+        return
+    _requests_completed += 1
+
+
 def _get_cli_version() -> str:
     """Get current CLI version string for request headers."""
     try:
@@ -81,7 +97,8 @@ def _client() -> tuple[str, dict]:
 def _enforce_version_once(server_url: str) -> None:
     """Run version enforcement exactly once per CLI session.
 
-    Checks if CLI version exactly matches server. Hard exits on mismatch.
+    Checks if CLI version exactly matches server. On a mismatch the CLI syncs
+    itself to the server and re-runs the command; it exits only if that fails.
     Exempt: `observal self` and `observal server` subcommands.
     """
     global _version_enforced
@@ -143,13 +160,31 @@ def _validation_detail(items: list) -> str | None:
     return "; ".join(lines) or None
 
 
-def _install_command(response: httpx.Response) -> str | None:
-    """The fix command a 426 response carries, if any."""
+def _server_version(response: httpx.Response) -> str | None:
+    """The server version a 426 response reports, if any."""
     try:
-        command = response.json().get("install_command")
+        version = response.json().get("server_version")
     except (ValueError, UnicodeDecodeError, AttributeError):
         return None
-    return command if isinstance(command, str) and command else None
+    return version if isinstance(version, str) and version else None
+
+
+def _version_mismatch_message(server_version: str | None) -> str:
+    """The 426 message, from the parsed server version only."""
+    from packaging.version import InvalidVersion, Version
+
+    from observal_cli.auto_sync import _SAFE_VERSION
+
+    try:
+        server = str(Version(server_version)) if server_version else None
+    except InvalidVersion:
+        server = None
+    if server is not None and _SAFE_VERSION.fullmatch(server_version):
+        server = server_version  # as the server wrote it, like the remediation
+    cli = _get_cli_version()
+    if server is None:
+        return f"The server does not accept Observal CLI {cli}."
+    return f"Observal CLI {cli} does not match server {server}; the server accepts only its own version."
 
 
 def _browse_remediation(path: str) -> str:
@@ -253,12 +288,28 @@ def _handle_error(
             **context,
         )
     if code == 426:
+        from observal_cli import auto_sync
+
+        # The gate in `_client` normally syncs first; this covers a server that
+        # changed version mid-command. The sync re-runs the command only when
+        # nothing of it reached the server yet (auto_sync._rerun_blocker).
+        sync_failure = auto_sync.sync_to_server(config.load().get("server_url", ""))
+        if sync_failure is None:
+            fail(
+                ErrorCategory.VERSION,
+                "The server changed version during this command. The CLI has been synced to it.",
+                remediation="Check what the command already changed, then run it again.",
+                **context,
+            )
+        # Built here from parsed versions. The response's `detail` and `install_command` are
+        # not repeated: they can tell the reader to install a commit this CLI refuses to build.
+        server_version = _server_version(response)
         fail(
             ErrorCategory.VERSION,
-            detail or "The CLI and server versions are incompatible.",
+            f"{_version_mismatch_message(server_version)} Automatic sync did not complete: {sync_failure}",
             remediation=(
-                f"Run {_install_command(response)}, then retry."
-                if _install_command(response)
+                auto_sync.manual_fix(server_version, _get_cli_version())
+                if server_version
                 else "Run observal self upgrade --force --output json, then retry."
             ),
             **context,
@@ -415,6 +466,7 @@ def _request_with_retry(
             elapsed = (time.monotonic() - t0) * 1000
             optic.debug("{} {} -> {} ({:.0f}ms)", method.upper(), safe_url, r.status_code, elapsed)
             r.raise_for_status()
+            record_completed_request()
             return r
         # Honor Retry-After header if present
         retry_after = r.headers.get("Retry-After")

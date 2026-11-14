@@ -1336,12 +1336,9 @@ def test_check_version_compatibility_dev_server_prints_source_install(
     with pytest.raises(typer.Exit) as error:
         version_check.check_version_compatibility("https://registry.example.test")
 
-    assert error.value.exit_code == 1
-    assert (
-        "uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main"
-        in messages[0]
-    )
-    assert "observal-cli==" not in messages[0]
+    assert error.value.exit_code == 10
+    # `self upgrade` builds only a published commit; a raw install of `main` would follow a moving branch.
+    assert error.value.remediation == "Run observal self upgrade --version 1.15.0-dev.0 --force, then retry."
 
 
 def test_check_version_compatibility_accepts_matching_prerelease_cli(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1375,13 +1372,16 @@ def test_check_version_compatibility_prints_exact_upgrade_guidance_and_exits(
     with pytest.raises(typer.Exit) as error:
         version_check.check_version_compatibility("https://registry.example.test")
 
-    assert error.value.exit_code == 1
+    # The shared error contract (category, exit code 10), so JSON mode emits one error object.
+    assert error.value.category.value == "version_mismatch"
+    assert error.value.exit_code == 10
     upgrade_command.assert_called_once_with("2.0.0")
-    assert messages == [
-        "\n[bold red]✖ CLI version 1.0.0 is behind server 2.0.0.[/bold red]\n"
-        "  Upgrade the CLI to match your server:\n\n"
-        "    [cyan]install exact version 2.0.0[/cyan]\n"
-    ]
+    assert error.value.message == (
+        "CLI version 1.0.0 is behind server 2.0.0. "
+        "Automatic sync did not complete: Automatic sync is disabled in tests."
+    )
+    assert error.value.remediation == "Run install exact version 2.0.0, then retry."
+    assert messages == []
 
 
 def test_check_version_compatibility_prints_exact_downgrade_guidance_and_exits(
@@ -1399,10 +1399,11 @@ def test_check_version_compatibility_prints_exact_downgrade_guidance_and_exits(
     with pytest.raises(typer.Exit) as error:
         version_check.check_version_compatibility("https://registry.example.test")
 
-    assert error.value.exit_code == 1
-    expected_command = f"observal self downgrade {VERSION_OPTION} 1.0.0"
-    assert messages == [
-        "\n[bold red]✖ CLI version 2.0.0 is ahead of server 1.0.0.[/bold red]\n"
-        "  Downgrade the CLI to match your server:\n\n"
-        f"    [cyan]{expected_command}[/cyan]\n"
-    ]
+    assert error.value.exit_code == 10
+    expected_command = f"observal self downgrade {VERSION_OPTION} 1.0.0 {LONG_OPTION}force"
+    assert error.value.message == (
+        "CLI version 2.0.0 is ahead of server 1.0.0. "
+        "Automatic sync did not complete: Automatic sync is disabled in tests."
+    )
+    assert error.value.remediation == f"Run {expected_command}, then retry."
+    assert messages == []

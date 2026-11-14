@@ -8,6 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from observal_cli.install_detector import (
     InstallInfo,
     InstallMethod,
@@ -17,6 +19,14 @@ from observal_cli.install_detector import (
     pip_interpreter,
     upgrade_command,
 )
+
+
+@pytest.fixture(autouse=True)
+def _default_tool_homes(monkeypatch):
+    """Use each installer's default home. GitHub's Ubuntu runners set PIPX_HOME=/opt/pipx, and
+    with it set, a copy in the default pipx home is not one `pipx install` would replace."""
+    for variable in ("PIPX_HOME", "UV_TOOL_DIR", "XDG_DATA_HOME"):
+        monkeypatch.delenv(variable, raising=False)
 
 
 class TestDetectFromPath:
@@ -94,6 +104,17 @@ class TestDetectFromPath:
         assert result.method == InstallMethod.PIPX
         assert result.managed_by == "pipx"
 
+    def test_pipx_path_in_a_custom_pipx_home_detected(self, monkeypatch, tmp_path):
+        """As on GitHub's runners: PIPX_HOME=/opt/pipx, and the copy lives there."""
+        pipx_home = tmp_path / "opt" / "pipx"
+        binary = pipx_home / "venvs" / "observal-cli" / "bin" / "observal"
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+        monkeypatch.setenv("PIPX_HOME", str(pipx_home))
+
+        assert _detect_from_path(binary, str(binary).lower()).method == InstallMethod.PIPX
+
     def test_curl_metadata_detected(self, monkeypatch, tmp_path):
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
         binary = tmp_path / "bin" / "observal"
@@ -142,9 +163,12 @@ def test_detect_python_module_uses_running_interpreter(monkeypatch, tmp_path):
     monkeypatch.setattr("sys.executable", str(interpreter))
     monkeypatch.setattr(install_detector, "_cached_info", None)
     monkeypatch.setattr(
-        install_detector, "_detect_from_path", lambda path, _: InstallInfo(InstallMethod.PIP, path, True, "pip")
+        install_detector,
+        "_detect_from_path",
+        lambda path, _, **_kwargs: InstallInfo(InstallMethod.PIP, path, True, "pip"),
     )
-    assert detect().path == interpreter.resolve()
+    # Not resolved: a virtualenv python links to its base interpreter, which does not own the CLI.
+    assert detect().path == interpreter.absolute()
 
 
 def test_detect_uses_invoked_entry_point_not_another_observal_on_path(monkeypatch, tmp_path):
@@ -156,7 +180,9 @@ def test_detect_uses_invoked_entry_point_not_another_observal_on_path(monkeypatc
     monkeypatch.setattr(install_detector.shutil, "which", lambda _: "/elsewhere/observal")
     monkeypatch.setattr(install_detector, "_cached_info", None)
     monkeypatch.setattr(
-        install_detector, "_detect_from_path", lambda path, _: InstallInfo(InstallMethod.PIP, path, True, "pip")
+        install_detector,
+        "_detect_from_path",
+        lambda path, _, **_kwargs: InstallInfo(InstallMethod.PIP, path, True, "pip"),
     )
     assert detect().path == script.resolve()
 

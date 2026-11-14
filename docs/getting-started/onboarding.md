@@ -57,7 +57,7 @@ The CLI saves its registry connection and credentials in `~/.observal/config.jso
 | --- | --- |
 | `observal: command not found` | Open a new terminal and check the [installation guide](/getting-started/installation#troubleshooting). |
 | Connection failure | Confirm the registry URL and any required VPN. Check `https://YOUR-REGISTRY/health`; replace the hostname first. |
-| CLI/server version mismatch | Follow the exact upgrade or downgrade command printed by the CLI, then check `observal --version` again. |
+| CLI/server version mismatch | The CLI syncs itself to the server's version automatically. If the error still appears, follow the exact upgrade or downgrade command it prints, then check `observal --version` again. |
 | No account or registration disabled | Ask your administrator for an invitation or access. Do not deploy another server just to join this one. |
 | No agents in the list | Ask for a published agent and the correct teamspace membership, or follow the [empty-registry path](/getting-started/quickstart#no-agents-yet). |
 

@@ -70,11 +70,15 @@ app = typer.Typer(
         "  observal scan\n"
         "  observal agent list\n"
         "  observal registry mcp list\n\n"
-        "For agents: on a CLI/server version mismatch, run the command the error prints "
+        "For agents: the CLI syncs itself to the connected server's version at login and whenever a command "
+        "finds a mismatch, then re-runs that command; do nothing while stderr reports the sync. "
+        "If a version_mismatch error still appears, run the command it prints "
         "(or `observal self upgrade --version <server version> --force --output json`) and re-check "
         "`observal --version`. Only if that fails, install from the source repository: "
-        "`uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main` for a -dev server, "
-        "or `...Observal@v<version>` for a release."
+        "`uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@<commit>` "
+        "for a -dev server, where the commit is `build_commit` from `/api/v1/config/version`. If the server reports "
+        "none, use a commit whose `pyproject.toml` declares the server's version: `main` only when it still does, "
+        "otherwise an earlier commit from `git log -- pyproject.toml`. Use `...@v<version>` for a release."
     ),
     no_args_is_help=True,
     rich_markup_mode="rich",
@@ -97,7 +101,11 @@ def main(
     debug: bool = typer.Option(False, "--debug", help="Debug logging"),
 ):
     """Observal: MCP Server & Agent Registry CLI"""
+    from observal_cli import auto_sync
     from observal_cli.optic import setup_optic
+
+    # Only a command process syncs the CLI to the server, and only re-runs while its input is unread.
+    auto_sync.begin_command()
 
     # Scan must decide whether it is the strictly read-only inventory variant
     # before any startup migration, skill synchronization, or file logging.
@@ -359,8 +367,9 @@ def _show_update_banner() -> None:
 
     Never mutates the installed binary. Surfaces both upgrades (community
     GitHub-latest) and downgrades (server recommends an older version) as a
-    notice with the explicit command to run. Version mismatches that block
-    operation are still enforced by the version enforcement gate.
+    notice with the explicit command to run. A mismatch with the connected
+    server is not left to this banner: `auto_sync` installs the server's
+    version at login and at the version enforcement gate.
     """
     import sys as _sys
 
