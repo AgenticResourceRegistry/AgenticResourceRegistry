@@ -787,8 +787,9 @@ class Orchestrator:
         for handle in self._log_handles:
             try:
                 handle.close()
-            except Exception:
-                pass
+            except OSError as exc:
+                optic.debug("Failed to close log handle: error={}", exc)
+
         self._log_handles.clear()
 
         console.print("[green]\u2713[/green] All services stopped")
