@@ -189,6 +189,9 @@ def generate_redis_conf() -> Path:
     log_path = LOG_DIR / "redis.log"
     pid_path = RUN_DIR / "redis.pid"
 
+    def _redis_quote(value):
+        return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
     content = dedent(f"""\
         # Observal embedded Redis configuration
         # Auto-generated - do not edit manually
@@ -196,10 +199,10 @@ def generate_redis_conf() -> Path:
         bind 127.0.0.1
         port {REDIS_PORT}
         daemonize no
-        pidfile {pid_path}
+        pidfile \"{_redis_quote(pid_path)}\"
 
         # Persistence
-        dir {data_path}
+        dir \"{_redis_quote(data_path)}\"
         save 900 1
         save 300 10
         save 60 10000
@@ -210,7 +213,7 @@ def generate_redis_conf() -> Path:
         maxmemory-policy allkeys-lru
 
         # Logging
-        logfile {log_path}
+        logfile \"{_redis_quote(log_path)}\"
         loglevel warning
 
         # Performance
