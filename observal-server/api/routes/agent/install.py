@@ -328,13 +328,6 @@ async def install_agent(
     )
     if any(set(ids) - set(listings) for ids, listings in component_maps):
         raise HTTPException(status_code=404, detail="Agent contains a component unavailable to this agent target")
-    listing_by_type = {
-        "mcp": mcp_listings_map,
-        "skill": skill_listings_map,
-        "hook": hook_listings_map,
-        "prompt": prompt_listings_map,
-        "sandbox": sandbox_listings_map,
-    }
     # Generate every component from the exact version this agent release pinned,
     # never from the listing's latest release.
     from services.agent_lock import LOCK_VERSION, load_pinned_listings, stored_lock_digest
@@ -471,7 +464,7 @@ async def install_agent(
         component_aliases.update(mapped)
     component_pin_entries = []
     for component in install_components:
-        listing = listing_by_type.get(component.component_type, {}).get(component.component_id)
+        listing = pins.listings.get(component.component_type, {}).get(component.component_id)
         component_pin_entries.append(
             {
                 "id": str(component.component_id),
