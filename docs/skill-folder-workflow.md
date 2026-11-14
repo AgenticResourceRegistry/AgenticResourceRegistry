@@ -101,10 +101,14 @@ An installation receipt records exact registry, listing, release, target,
 owner, and sorted file hashes/modes in `~/.observal/lockfile.json`; it stores
 no file content or credentials. The CLI checks every local file, including
 unexpected files, before treating an existing folder as managed. Managed
-folder installs, upgrades, backup restores, and pinned Agent folder pulls
-currently require POSIX filesystem semantics (Linux/macOS or WSL on its Linux
-filesystem); native Windows is not supported and fails closed. This restriction
-does not apply to the existing Git and single-file workflows. A modified,
+folder installs, upgrades, backup restores, and pinned Agent folder pulls work
+on Linux, macOS, WSL and native Windows. On Windows the CLI holds a handle on
+the destination and backup directories, which stops them and their ancestors
+from being renamed or replaced by a junction during the swap; a symlink or
+junction anywhere in either path is refused. Windows has no executable bit, so
+file modes are verified by write access only. When another program keeps a file
+in the folder open, the swap retries for a few seconds and then fails with the
+original installation preserved. A modified,
 symlinked, differently owned or ambiguous destination is **not** overwritten.
 Do not delete it or use `--force`; export the reviewed release, back up local
 changes separately, and resolve the mismatch deliberately. A historical folder
