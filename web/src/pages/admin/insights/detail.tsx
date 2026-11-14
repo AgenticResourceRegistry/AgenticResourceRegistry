@@ -57,6 +57,8 @@ import type {
 	FeatureSuggestion,
 	InsightReport,
 	RegistryMatchSummary,
+    InsightConfigAddition,
+    InsightUsageSuggestion,
 } from "@/lib/types";
 
 // ── Status Indicator ──────────────────────────────────────────────────────
@@ -741,6 +743,7 @@ function SuggestionCard({
 	title,
 	reason,
 	copyText,
+    sourceRefs,
 	children,
 }: {
 	selectable: boolean;
@@ -751,6 +754,7 @@ function SuggestionCard({
 	title: string;
 	reason?: string;
 	copyText?: string;
+    sourceRefs?: string[];
 	children?: React.ReactNode;
 }) {
 	const [open, setOpen] = React.useState(false);
@@ -775,6 +779,7 @@ function SuggestionCard({
 				<p className="text-sm font-semibold leading-6 text-foreground">
 					<RichText text={title} />
 				</p>
+                {sourceRefs?.length ? <p className="text-xs text-muted-foreground break-all">Sources: {sourceRefs.join(", ")}</p> : null}
 				{/* Only the change itself shows by default; the reason and any snippet open on demand. */}
 				{hasMore && (
 					<button
@@ -942,9 +947,9 @@ function SuggestionsSection({
 	const obj = data as Record<string, unknown>;
 
 	// V4 format
-	const configAdditions = obj.config_additions as { addition: string; why: string; where: string; confidence?: string; risk?: string }[] | undefined;
+	const configAdditions = obj.config_additions as InsightConfigAddition[] | undefined;
 	const featuresToTry = obj.features_to_try as FeatureSuggestion[] | undefined;
-	const usagePatterns = obj.usage_patterns as { title: string; suggestion: string; detail: string; copyable_prompt: string }[] | undefined;
+	const usagePatterns = obj.usage_patterns as InsightUsageSuggestion[] | undefined;
 
 	// V3 fallback
 	const items = obj.items as { title: string; action: string; why: string; priority: string }[] | undefined;
@@ -998,9 +1003,11 @@ function SuggestionsSection({
 								title={c.addition}
 								reason={c.why}
 								copyText={c.addition}
+                                sourceRefs={c.evidence_refs}
 							/>
 						))}
 					</SuggestionGroup>
+
 				)}
 
 				{featuresToTry && featuresToTry.length > 0 && (
@@ -1022,11 +1029,13 @@ function SuggestionsSection({
 									reason={f.why_for_you}
 									// A reuse suggestion has no generated body to copy.
 									copyText={f.component_ref ? undefined : f.example}
+                                    sourceRefs={f.evidence_refs}
 								>
 									{f.component_ref && <ReuseBadge componentRef={f.component_ref} />}
 									{f.match_reason && <p className="text-sm leading-6 text-muted-foreground"><RichText text={f.match_reason} /></p>}
 									{f.example && !f.component_ref && <SuggestionSnippet text={f.example} />}
 								</SuggestionCard>
+
 							))}
 					</SuggestionGroup>
 				)}
@@ -1042,12 +1051,14 @@ function SuggestionsSection({
 								title={p.title}
 								reason={p.suggestion}
 								copyText={p.copyable_prompt}
+                                sourceRefs={p.evidence_refs}
 							>
 								{p.detail && <p className="text-sm leading-6 text-muted-foreground"><RichText text={p.detail} /></p>}
 								{p.copyable_prompt && <SuggestionSnippet text={p.copyable_prompt} />}
 							</SuggestionCard>
 						))}
 					</SuggestionGroup>
+
 				)}
 
 				{/* V3 fallback: items array */}
@@ -1900,6 +1911,17 @@ function ReportContent({
 			<KeyPointsSummary report={report} />
 			<SectionToggles sections={sections} />
 
+            <div role="status" className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
+                <p className="font-semibold">Recommendation evidence</p>
+                <p className="mt-1 text-muted-foreground">MCP target attempts (not successful component use): {Object.entries((rich?.observed_mcp_target_attempts ?? {}) as Record<string, number>).map(([target, count]) => `${target}: ${count}`).join(" · ") || "none identified"}. Unidentified attempts: {Number(rich?.unidentified_mcp_attempts ?? 0)}. Skill/sandbox use remains unknown unless separately evidenced.</p>
+                {narrative?.evidence_validation ? <>
+                    <p className="mt-1">{narrative.evidence_validation.change_eligible_sources ?? 0} in-scope sources eligible for changes. {narrative.evidence_validation.rejected_records?.length ?? 0} unsupported records withheld.</p>
+                    <p className="mt-1 text-muted-foreground">Task relevance is model-assessed. Source references support auditability, not correctness or causal attribution. Unknown/off-task evidence cannot justify agent changes.</p>
+                    <details className="mt-2"><summary className="cursor-pointer">Source details</summary>
+                        <ul className="mt-2 space-y-1">{Object.entries(narrative.source_index ?? {}).map(([ref, source]) => <li className="break-all" key={ref}>{ref}: {source.harness}/{source.session_id} — {source.task_relevance} (model-assessed)</li>)}</ul>
+                    </details>
+                </> : <p className="mt-1 text-muted-foreground">This legacy report has no validated per-claim source references. Treat recommendations as unverified candidates.</p>}
+            </div>
 			{show("suggestions") && (
 				<>
 					<SuggestionsSection
@@ -1911,6 +1933,7 @@ function ReportContent({
 					<DiscoveryOptimizationSection requested={report.discovery_optimization_requested} result={narrative?.discovery} />
 				</>
 			)}
+
 
 			{show("analysis") && (
 				<>

@@ -25,6 +25,7 @@ import structlog
 from observal_shared.migration.constants import DEFAULT_PROJECT_ID
 
 from ._deps import get_db_session
+from .evidence import RELEVANCE_SCHEMA, prompt_sources, qualified, role_context, role_hash, source_ref, sources
 from .facets import aggregate_facets, extract_facets, load_cached_facets_batch, store_facets
 from .registry_match import (
     RegistryScope,
@@ -138,6 +139,33 @@ async def _run_pipeline(
         logger.warning("insight_no_sessions", agent_id=agent_id)
         return _empty_report()
 
+    # This consumer never invents verification. On old main the missing cohort
+    # contract fails closed; substantive recommendations depend on the cohort PR.
+    session_metas = [m for m in session_metas if qualified(m)]
+    if not session_metas:
+        result = _empty_report()
+        result["narrative"]["source_index"] = {}
+        result["narrative"]["evidence_validation"] = {
+            "state": "blocked",
+            "instruction_matched_sources": 0,
+            "change_eligible_sources": 0,
+            "rejected_records": [],
+            "limitations": ["Verified cohort contract unavailable"],
+        }
+        result["metrics"]["recommendation_evidence"] = {
+            "state": "blocked",
+            "reason": "verified_cohort_contract_unavailable",
+        }
+        result["narrative"]["suggestions"] = {"config_additions": [], "features_to_try": [], "usage_patterns": []}
+        return result
+    role = (agent_config or {}).get("system_prompt_excerpt", "")
+    declared_complete = (
+        isinstance(role, str) and bool(role) and (agent_config or {}).get("system_prompt_length", 2001) <= len(role)
+    )
+    _, _, complete = role_context(role, declared_complete)
+    for meta in session_metas:
+        meta["_agent_scope_excerpt"] = role
+        meta["_agent_scope_complete"] = complete
     logger.info("insight_metas_extracted", count=len(session_metas))
     await _emit_progress(progress_callback, "building_transcripts", 2, 9, "Building session transcripts")
 
@@ -146,6 +174,13 @@ async def _run_pipeline(
 
     session_ids = [m["session_key"] for m in session_metas]
     facets_by_session = await load_cached_facets_batch(session_ids, db)
+    facets_by_session = {
+        key: facet
+        for key, facet in facets_by_session.items()
+        if facet.get("_relevance_schema") == RELEVANCE_SCHEMA
+        and facet.get("_scope_hash") == role_hash(role)
+        and facet.get("_scope_complete") is complete
+    }
     logger.info("insight_cached_facets_loaded", count=len(facets_by_session))
 
     # Build transcripts only for top sessions that still need facets.
@@ -182,7 +217,11 @@ async def _run_pipeline(
             )
         )
 
-    all_facets = [facets_by_session[sid] for sid in session_ids if facets_by_session.get(sid)]
+    all_facets = [
+        {**facets_by_session[sid], "_evidence_ref": source_ref(sid)}
+        for sid in session_ids
+        if facets_by_session.get(sid)
+    ]
 
     logger.info("insight_facets_extracted", count=len(all_facets))
     await _emit_progress(progress_callback, "analyzing_versions", 4, 9, "Analyzing versions, layers, and dirty cohorts")
@@ -346,6 +385,7 @@ async def _run_pipeline(
             logger.warning("prior_version_comparison_failed", prior_version=comparison_agent_version, error=str(e))
 
     # ── Step 4: Build the data block (pi-style focused format) ────────────
+    evidence_index = sources(session_metas, facets_by_session, role_hash(role))
     facets_summary = aggregate_facets(all_facets)
     cache_read_tokens = agg.get("total_cache_read_tokens", 0)
     cache_write_tokens = agg.get("total_cache_write_tokens", 0)
@@ -363,6 +403,9 @@ async def _run_pipeline(
         model_efficiency=model_efficiency,
         estimated_waste=estimated_waste,
         component_utilization=component_utilization,
+    )
+    data_block += "\n\n## Source evidence index\n" + json.dumps(
+        prompt_sources(evidence_index, [f.get("_evidence_ref") for f in all_facets[-MAX_FACET_SESSIONS:]]), indent=2
     )
     if comparison_cohort:
         data_block += f"\n\n## Prior Version Comparison Cohort\n{json.dumps(comparison_cohort, indent=2, default=str)}"
@@ -403,6 +446,7 @@ async def _run_pipeline(
     await _emit_progress(progress_callback, "generating_sections", 7, 9, "Generating report sections")
     narrative = await generate_sections(
         data_block=data_block,
+        evidence_index=evidence_index,
         previous_report=previous_metrics,
         registry_offer=registry_offer,
     )
@@ -445,6 +489,9 @@ async def _run_pipeline(
             "interruptions": agg.get("total_interruptions", 0),
             "subagent_sessions": agg.get("sessions_using_subagent", 0),
             "mcp_sessions": agg.get("sessions_using_mcp", 0),
+            "observed_mcp_target_attempts": agg.get("observed_mcp_target_attempts", {}),
+            "unidentified_mcp_attempts": agg.get("unidentified_mcp_attempts", 0),
+            "capability_use_limit": "Configured servers are not observed targets. Target attempts do not prove success or registry component identity. Skill/sandbox use is unassessed unless separately evidenced.",
             "total_cost_usd": round(agg.get("total_cost", 0), 2),
             "total_credits": round(agg.get("total_credits", 0), 4),
             "total_input_tokens": agg.get("total_input_tokens", 0),
@@ -515,27 +562,16 @@ def _analyze_component_utilization(agent_config: dict, session_metas: list[dict]
     if not components:
         return []
 
-    searchable = "\n".join(
-        [str(m.get("first_prompt", "")) for m in session_metas]
-        + [str(f.get("brief_summary", "")) for f in all_facets if f]
-        + [" ".join(m.get("tool_counts", {}).keys()) for m in session_metas]
-    ).lower()
-    results = []
-    for comp_type, name in components:
-        key = name.lower().replace("-", " ")
-        compact = name.lower()
-        mentions = searchable.count(key) + searchable.count(compact)
-        status = "used" if mentions > 0 else "unused_or_unobserved"
-        results.append(
-            {
-                "type": comp_type,
-                "name": name,
-                "observed_mentions": mentions,
-                "status": status,
-                "confidence": "medium" if mentions > 0 else "low",
-            }
-        )
-    return results
+    return [
+        {
+            "type": kind,
+            "name": name,
+            "status": "unknown",
+            "confidence": "unknown",
+            "reason": "Configuration and textual mentions are not successful load/use evidence",
+        }
+        for kind, name in components
+    ]
 
 
 async def _extract_facets_batch(
@@ -641,6 +677,9 @@ def _build_data_block(
         "interruptions": agg.get("total_interruptions", 0),
         "subagent_sessions": agg.get("sessions_using_subagent", 0),
         "mcp_sessions": agg.get("sessions_using_mcp", 0),
+        "observed_mcp_target_attempts": agg.get("observed_mcp_target_attempts", {}),
+        "unidentified_mcp_attempts": agg.get("unidentified_mcp_attempts", 0),
+        "capability_use_limit": "Targets are explicit attempts, not successful use/registry identities. Configured names and text mentions do not prove skill/sandbox use.",
         "top_tools": agg.get("top_tools", [])[:10],
         "top_languages": agg.get("top_languages", [])[:10],
         "tool_error_categories": agg.get("tool_error_categories", {}),
@@ -688,7 +727,7 @@ def _build_data_block(
             outcome = f.get("outcome", "unclear")
             helpfulness = f.get("agent_helpfulness", "unknown")
             if brief:
-                summaries.append(f"- {brief} ({outcome}, {helpfulness})")
+                summaries.append(f"- [{f.get('_evidence_ref', 'unreferenced')}] {brief} ({outcome}, {helpfulness})")
 
         if summaries:
             sections.append("\nSESSION SUMMARIES:\n" + "\n".join(summaries))
@@ -702,7 +741,7 @@ def _build_data_block(
                 desc = fp.get("description", "")
                 ftype = fp.get("type", "")
                 if desc:
-                    friction_details.append(f"- [{ftype}] {desc}")
+                    friction_details.append(f"- [{f.get('_evidence_ref', 'unreferenced')}][{ftype}] {desc}")
 
         if friction_details:
             sections.append("\nFRICTION DETAILS:\n" + "\n".join(friction_details[:30]))
@@ -714,7 +753,7 @@ def _build_data_block(
                 continue
             for instr in f.get("repeated_instructions", []):
                 if instr:
-                    user_instructions.append(f"- {instr}")
+                    user_instructions.append(f"- [{f.get('_evidence_ref', 'unreferenced')}] {instr}")
 
         if user_instructions:
             sections.append("\nUSER INSTRUCTIONS TO ASSISTANT:\n" + "\n".join(user_instructions[:20]))

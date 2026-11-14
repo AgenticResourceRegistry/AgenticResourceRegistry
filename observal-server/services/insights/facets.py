@@ -14,7 +14,10 @@ from datetime import UTC, datetime
 
 import structlog
 
+from services.secrets_redactor import redact_secrets
+
 from ._deps import get_call_model, get_facets_model
+from .evidence import RELEVANCE_SCHEMA, role_context
 from .scope import SessionKey
 
 logger = structlog.get_logger(__name__)
@@ -63,11 +66,17 @@ CRITICAL GUIDELINES:
 
 5. If very short or just a warmup, use "warmup_minimal" for goal_categories.
 
+CONFIGURED ROLE EXCERPT (not a user task):
+{agent_role}
+
+Assess task relevance ONLY from the actual user task versus this role. Off-task work remains diagnostic data, never a reason to redefine the agent. Unknown/truncated role context must stay unknown.
+
 SESSION:
 {transcript}
 
 RESPOND WITH ONLY A VALID JSON OBJECT:
 {{
+  "agent_task_relevance": {{"state": "in_scope | out_of_scope | unknown", "reason": "short model-assessed reason"}},
   "underlying_goal": "<what the user fundamentally wanted to accomplish>",
   "goal_categories": ["<from: debug_investigate, implement_feature, fix_bug, write_script_tool, refactor_code, configure_system, create_pr_commit, analyze_data, understand_codebase, write_tests, write_docs, deploy_infra, warmup_minimal>"],
   "outcome": "<fully_achieved | mostly_achieved | partially_achieved | not_achieved | unclear>",
@@ -104,12 +113,31 @@ async def extract_facets(
 
     model_override = await ds.get("insights.model_facets") or None
 
-    prompt = FACET_PROMPT.format(transcript=transcript)
+    role, scope_hash, complete = role_context(meta.get("_agent_scope_excerpt"), meta.get("_agent_scope_complete"))
+    prompt = FACET_PROMPT.format(transcript=transcript, agent_role=role or "Unavailable; relevance is unknown")
 
     try:
         result = await call_model(prompt, model_override=model_override, max_tokens=4096)
         if result and isinstance(result, dict):
-            return result
+            relevance = result.get("agent_task_relevance")
+            if (
+                not complete
+                or not isinstance(relevance, dict)
+                or relevance.get("state") not in {"in_scope", "out_of_scope", "unknown"}
+            ):
+                relevance = {"state": "unknown", "reason": "Role or relevance assessment unavailable/incomplete"}
+            else:
+                relevance = {
+                    "state": relevance["state"],
+                    "reason": redact_secrets(str(relevance.get("reason", ""))[:400]),
+                }
+            return {
+                **result,
+                "agent_task_relevance": relevance,
+                "_relevance_schema": RELEVANCE_SCHEMA,
+                "_scope_hash": scope_hash,
+                "_scope_complete": complete,
+            }
         return {}
     except Exception as e:
         logger.error("facets_extraction_failed", session_id=session_id, error=str(e))
