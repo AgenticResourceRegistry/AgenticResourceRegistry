@@ -154,7 +154,7 @@ jobs:
           # --version exits before startup; this command checks bundled skills without logging in.
           ./dist/${{ matrix.artifact }} config path --output json
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
@@ -212,7 +212,7 @@ jobs:
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: docker-digest-${{ matrix.image }}-${{ matrix.arch }}
           path: /tmp/digests/*
@@ -302,7 +302,7 @@ jobs:
 
           tar -czf "observal-server-v${VERSION}.tar.gz" "$STAGING"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: observal-server-v${{ needs.preflight.outputs.version }}.tar.gz
           path: observal-server-v${{ needs.preflight.outputs.version }}.tar.gz
@@ -471,7 +471,7 @@ jobs:
             --version "$VERSION" \
             --app-version "$VERSION"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: observal-helm-chart-v${{ needs.preflight.outputs.version }}
           path: chart-dist/observal-${{ needs.preflight.outputs.version }}.tgz
