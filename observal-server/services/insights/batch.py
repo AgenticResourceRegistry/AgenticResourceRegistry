@@ -26,12 +26,13 @@ from services.redis import _get_arq_pool
 from services.secrets_redactor import redact_secrets
 
 from ._deps import recording_models
+from .cohort import POLICY_VERSION
 from .registry_match import RegistryScope
 
 logger = structlog.get_logger(__name__)
 
 
-async def _load_agent_config(db, agent_id) -> dict | None:
+async def _load_agent_config(db, agent_id, *, version_id=None, version_label=None) -> dict | None:
     """Load the agent's latest approved version and its components.
 
     Returns a dict summarizing the agent configuration, or None if no
@@ -46,6 +47,10 @@ async def _load_agent_config(db, agent_id) -> dict | None:
         .order_by(AgentVersion.released_at.desc())
         .limit(1)
     )
+    if version_id is not None:
+        stmt = stmt.where(AgentVersion.id == version_id)
+    elif version_label:
+        stmt = stmt.where(AgentVersion.version == version_label)
     result = await db.execute(stmt)
     version = result.scalar_one_or_none()
     if not version:
@@ -86,6 +91,11 @@ async def _load_agent_config(db, agent_id) -> dict | None:
         "version": version.version,
         "model": version.model_name,
         "supported_harnesses": version.supported_harnesses or [],
+        "_instruction_contract": {
+            "prompt": version.prompt or "",
+            "version_id": str(version.id),
+            "version": version.version,
+        },
     }
 
     if version.prompt:
@@ -329,7 +339,24 @@ async def run_single_report(report_id: str) -> None:
             agent_name = agent.name if agent else "Unknown Agent"
 
             # Load latest approved version with components for context-aware suggestions
-            agent_config = await _load_agent_config(db, report.agent_id)
+            agent_config = await _load_agent_config(
+                db,
+                report.agent_id,
+                version_id=getattr(report, "agent_version_id", None),
+                version_label=report.agent_version,
+            )
+            if agent_config:
+                agent_config["_instruction_contract"]["names"] = [agent.name, f"{agent.namespace}/{agent.slug}"]
+            if agent_config and report.comparison_agent_version:
+                prior = await _load_agent_config(
+                    db,
+                    report.agent_id,
+                    version_id=getattr(report, "comparison_agent_version_id", None),
+                    version_label=report.comparison_agent_version,
+                )
+                if prior:
+                    prior["_instruction_contract"]["names"] = [agent.name, f"{agent.namespace}/{agent.slug}"]
+                agent_config["_comparison_instruction_contract"] = (prior or {}).get("_instruction_contract")
 
             start_str = report.period_start.strftime("%Y-%m-%d %H:%M:%S")
             end_str = report.period_end.strftime("%Y-%m-%d %H:%M:%S")
@@ -340,7 +367,12 @@ async def run_single_report(report_id: str) -> None:
                 prev_stmt = select(InsightReport).where(InsightReport.id == report.previous_report_id)
                 prev_result = await db.execute(prev_stmt)
                 prev_report = prev_result.scalar_one_or_none()
-                if prev_report and prev_report.aggregated_data:
+                if (
+                    prev_report
+                    and prev_report.aggregated_data
+                    and ((prev_report.aggregated_data.get("metrics") or {}).get("cohort") or {}).get("policy_version")
+                    == POLICY_VERSION
+                ):
                     previous_metrics = prev_report.aggregated_data
 
             # Scope for registry reuse suggestions. The shortlist itself is

@@ -22,9 +22,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from observal_shared.migration.constants import DEFAULT_PROJECT_ID
-
 from ._deps import get_db_session
+from .cohort import prompt_metrics, qualified_cache, select_cohort
 from .facets import aggregate_facets, extract_facets, load_cached_facets_batch, store_facets
 from .registry_match import (
     RegistryScope,
@@ -132,11 +131,13 @@ async def _run_pipeline(
         period_end=period_end,
         agent_name=agent_name,
         agent_version=agent_version,
+        expected_instruction=(agent_config or {}).get("_instruction_contract"),
     )
+    session_metas, cohort_coverage = select_cohort(session_metas)
 
     if not session_metas:
         logger.warning("insight_no_sessions", agent_id=agent_id)
-        return _empty_report()
+        return _unverified_report(cohort_coverage)
 
     logger.info("insight_metas_extracted", count=len(session_metas))
     await _emit_progress(progress_callback, "building_transcripts", 2, 9, "Building session transcripts")
@@ -145,7 +146,7 @@ async def _run_pipeline(
     agg = aggregate_metas(session_metas)
 
     session_ids = [m["session_key"] for m in session_metas]
-    facets_by_session = await load_cached_facets_batch(session_ids, db)
+    facets_by_session = qualified_cache(await load_cached_facets_batch(session_ids, db), session_metas)
     logger.info("insight_cached_facets_loaded", count=len(facets_by_session))
 
     # Build transcripts only for top sessions that still need facets.
@@ -294,11 +295,13 @@ async def _run_pipeline(
                 period_end=period_end,
                 agent_name=agent_name,
                 agent_version=comparison_agent_version,
+                expected_instruction=(agent_config or {}).get("_comparison_instruction_contract"),
             )
+            prior_metas, prior_coverage = select_cohort(prior_metas)
             if prior_metas:
                 prior_agg = aggregate_metas(prior_metas)
                 prior_ids = [m["session_key"] for m in prior_metas]
-                prior_facets_by_session = await load_cached_facets_batch(prior_ids, db)
+                prior_facets_by_session = qualified_cache(await load_cached_facets_batch(prior_ids, db), prior_metas)
                 prior_ranked = [
                     m
                     for m in sorted(
@@ -331,6 +334,7 @@ async def _run_pipeline(
                     "current_version": agent_version,
                     "prior_version": comparison_agent_version,
                     "prior_sessions": len(prior_metas),
+                    "prior_cohort": prior_coverage,
                     "prior_metrics": prior_agg,
                     "prior_facets_summary": aggregate_facets(prior_facets),
                     "prior_faceted_sessions": len(prior_facets),
@@ -365,26 +369,12 @@ async def _run_pipeline(
         component_utilization=component_utilization,
     )
     if comparison_cohort:
-        data_block += f"\n\n## Prior Version Comparison Cohort\n{json.dumps(comparison_cohort, indent=2, default=str)}"
+        data_block += f"\n\n## Prior Version Comparison Cohort\n{json.dumps(prompt_metrics(comparison_cohort), indent=2, default=str)}"
 
     # ── Step 4b: Version impact analysis ─────────────────────────────────
+    # Existing layer-group queries are binding-scoped, not verified-session-scoped.
+    # Do not mix them into an instruction-effect report until that integration exists.
     version_impact = None
-    try:
-        from .version_impact import build_version_impact_data
-
-        version_impact = await build_version_impact_data(
-            agent_id=agent_id or "",
-            period_start=period_start,
-            period_end=period_end,
-            agent_name=agent_name,
-            agent_version=agent_version,
-            project_id=DEFAULT_PROJECT_ID,
-        )
-        if version_impact:
-            data_block += f"\n\n## Version Impact\n{json.dumps(version_impact, indent=2)}"
-            logger.info("version_impact_detected", groups=version_impact["group_count"])
-    except Exception as e:
-        logger.warning("version_impact_analysis_failed", error=type(e).__name__)
 
     # ── Step 4c: Shortlist reusable registry components ───────────────────
     # Driven by this report's own signals, so the model is offered things
@@ -403,7 +393,7 @@ async def _run_pipeline(
     await _emit_progress(progress_callback, "generating_sections", 7, 9, "Generating report sections")
     narrative = await generate_sections(
         data_block=data_block,
-        previous_report=previous_metrics,
+        previous_report=prompt_metrics(previous_metrics),
         registry_offer=registry_offer,
     )
 
@@ -431,9 +421,13 @@ async def _run_pipeline(
     # ── Build final report structure ──────────────────────────────────────
     # metrics.rich is what the frontend reads for stat cards
     metrics = {
+        "cohort": cohort_coverage,
+        "version_impact_coverage": {"state": "not_assessed", "reason": "requires_verified_session_scope"},
         "rich": {
             "total_sessions": agg.get("total_sessions", 0),
             "total_messages": agg.get("total_messages", 0),
+            "user_turns": agg.get("total_user_turns", 0),
+            "assistant_messages": agg.get("total_assistant_messages", 0),
             "active_hours": round(agg.get("total_duration_hours", 0), 1),
             "days_active": agg.get("days_active", 0),
             "lines_added": agg.get("total_lines_added", 0),
@@ -567,6 +561,10 @@ async def _extract_facets_batch(
         if isinstance(result, Exception):
             logger.warning("facet_task_exception", session=sid, error=str(result), type=type(result).__name__)
         elif isinstance(result, dict) and result:
+            result = {
+                **result,
+                "_cohort_key": (session_metas.get(sid, {}).get("instruction_evidence") or {}).get("cache_key"),
+            }
             await store_facets(sid, agent_id, result, db)
             facets_by_session[sid] = result
 
@@ -604,6 +602,7 @@ def _build_data_block(
         "sessions_with_facets": facets_summary.get("sessions_with_facets", 0),
         "date_range": agg.get("date_range", {}),
         "messages": agg.get("total_messages", 0),
+        "user_turns": agg.get("total_user_turns", 0),
         "hours": round(agg.get("total_duration_hours", 0)),
         "days_active": agg.get("days_active", 0),
         "commits": agg.get("git_commits", 0),
@@ -676,7 +675,8 @@ def _build_data_block(
 
     # Agent configuration (for component-aware suggestions)
     if agent_config:
-        sections.append(f"\n## Agent Configuration\n{json.dumps(agent_config, indent=2)}")
+        public_config = {k: v for k, v in agent_config.items() if not k.startswith("_")}
+        sections.append(f"\n## Agent Configuration\n{json.dumps(public_config, indent=2)}")
 
     # SESSION SUMMARIES (the key differentiator from old evals approach)
     if all_facets:
@@ -765,3 +765,17 @@ def _empty_report() -> dict:
         "facets_summary": {},
         "cross_user_patterns": {},
     }
+
+
+def _unverified_report(coverage):
+    """An empty qualified cohort means insufficient evidence, never agent non-use."""
+    report = _empty_report()
+    report["metrics"]["cohort"] = coverage
+    report["narrative"]["at_a_glance"] = {
+        "health": "mixed",
+        "whats_working": "Bound session records remain available for operational inspection.",
+        "whats_hindering": "No top-level sessions have sufficient recorded instruction evidence for agent-effect analysis.",
+        "quick_win": "Inspect unknown/mismatched instruction and parent metadata; a default binding alone is not proof of agent use.",
+    }
+    report["narrative"]["suggestions"] = {"config_additions": [], "features_to_try": [], "usage_patterns": []}
+    return report

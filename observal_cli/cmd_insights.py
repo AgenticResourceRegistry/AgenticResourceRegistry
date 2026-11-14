@@ -584,6 +584,7 @@ def insights_show(
                 resource="insight report section",
                 remediation=f"Choose from: {', '.join(narrative.keys())}.",
             )
+        _render_cohort_coverage(data)
         _render_section(section, narrative[section])
         if section == "suggestions":
             _render_registry_match_note(registry_match)
@@ -605,6 +606,8 @@ def insights_show(
     if rich.get("cache_hit_rate_pct") is not None:
         rprint(f"  Cache: {rich.get('cache_hit_rate_pct')}% hit rate, {rich.get('cache_tokens_saved', 0)} tokens saved")
     rprint()
+
+    _render_cohort_coverage(data)
 
     # Render sections in logical order
     order = [
@@ -1482,3 +1485,16 @@ def insights_generate(
         )
     hint = f"--component {esc(component[0])} {esc(component[1])}" if component else "<agent>"
     rprint(f"[dim]  Run `observal ops insights show {hint}` when complete.[/dim]")
+
+
+def _render_cohort_coverage(data):
+    """Show qualified-versus-bound counts without implying unknown sessions were unused."""
+    coverage = (data.get("metrics") or {}).get("cohort")
+    if isinstance(coverage, dict):
+        rprint(
+            f"  Instruction cohort: {coverage.get('verified_top_level_sessions', 0)} verified top-level / "
+            f"{coverage.get('bound_sessions', 0)} bound records; {coverage.get('child_sessions', 0)} children reported separately."
+        )
+        rprint("  [dim]Unknown/mismatched instructions are excluded, not evidence of non-use.[/dim]")
+    else:
+        rprint("  [yellow]Legacy report: bindings were not verified against recorded instructions.[/yellow]")

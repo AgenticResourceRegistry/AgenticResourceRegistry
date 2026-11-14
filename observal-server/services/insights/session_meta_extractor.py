@@ -23,7 +23,7 @@ from datetime import datetime
 import structlog
 
 from services.insight_version_filters import agent_version_filter
-from services.session_parsers import meta_records
+from services.session_parsers import instruction_evidence, meta_records
 
 from ._deps import get_query
 from .scope import SessionKey
@@ -401,7 +401,7 @@ async def fetch_session_stats(
         "param_agent_version": agent_version or "",
     }
     sql = """
-        SELECT project_id, user_id, harness, session_id, total_credits, layer_hash
+        SELECT project_id, user_id, harness, session_id, total_credits, layer_hash, parent_session_id, agent_version
         FROM session_stats_agg FINAL
         WHERE (agent_id = {agent_id:String} OR agent_id = {agent_name:String})
           AND last_event_time >= {t_start:String} AND last_event_time <= {t_end:String}
@@ -417,7 +417,9 @@ async def fetch_session_stats(
         sql = """
             SELECT project_id, user_id, harness, session_id,
                    max(credits) AS total_credits,
-                   anyIf(layer_hash, layer_hash IS NOT NULL AND layer_hash != '') AS layer_hash
+                   anyIf(layer_hash, layer_hash IS NOT NULL AND layer_hash != '') AS layer_hash,
+                   anyIf(parent_session_id, parent_session_id IS NOT NULL AND parent_session_id != '') AS parent_session_id,
+                   anyIf(agent_version, agent_version IS NOT NULL AND agent_version != '') AS reported_agent_version
             FROM session_events FINAL
             WHERE (agent_id = {agent_id:String} OR agent_id = {agent_name:String})
               AND timestamp >= {t_start:String} AND timestamp <= {t_end:String}
@@ -432,13 +434,25 @@ async def fetch_session_stats(
         except Exception as fallback_error:
             logger.warning("fetch_session_stats_fallback_failed", error=str(fallback_error))
             return {}
-    return {
+    stats = {
         SessionKey.from_row(row): {
             "credits": float(row.get("total_credits") or 0),
             "layer_hash": row.get("layer_hash", ""),
+            "parent_session_id": str(row.get("parent_session_id") or ""),
+            "reported_agent_version": row.get("reported_agent_version", row.get("agent_version", "")),
         }
         for row in rows
     }
+    from services.session_parent_evidence import load_parent_evidence, parent_decision
+
+    try:
+        declarations = await load_parent_evidence(list(stats), query)
+    except Exception as error:
+        logger.warning("parent_evidence_unavailable", error=type(error).__name__)
+        declarations = {}
+    for key, values in stats.items():
+        values.update(parent_decision(values["parent_session_id"], declarations.get(key, [])))
+    return stats
 
 
 async def fetch_all_session_transcripts(
@@ -537,7 +551,9 @@ async def extract_all_session_metas(
     period_end: str,
     agent_name: str = "",
     agent_version: str | None = None,
+    expected_instruction: dict | None = None,
 ) -> list[dict]:
+    """Discover scoped session records and preserve failed/child coverage independently of analysis."""
     transcripts = await fetch_all_session_transcripts(
         agent_id,
         period_start,
@@ -561,7 +577,7 @@ async def extract_all_session_metas(
             # model (missing credentials, a crash), so it says nothing about the agent.
             # Formats the extractor cannot read count neither and are kept.
             failed_runs += 1
-            continue
+            meta["failed_run"] = True
         meta.update(
             session_key=key,
             project_id=key.project_id,
@@ -570,7 +586,22 @@ async def extract_all_session_metas(
             credits=stats.get(key, {}).get("credits", 0.0),
             layer_hash=stats.get(key, {}).get("layer_hash", ""),
             agent_version=agent_version or "",
+            reported_agent_version=stats.get(key, {}).get("reported_agent_version", ""),
+            parent_session_id=stats.get(key, {}).get("parent_session_id", ""),
+            parent_metadata_known=stats.get(key, {}).get("parent_metadata_known", False),
+            parent_metadata_reason=stats.get(key, {}).get("parent_metadata_reason", "parent_evidence_unavailable"),
+            instruction_evidence=instruction_evidence(key.harness, lines, expected_instruction),
         )
+        # Parent evidence changes eligibility even when the transcript is unchanged.
+        original = meta["instruction_evidence"].get("cache_key")
+        if original:
+            import hashlib
+
+            parent_key = stats.get(key, {}).get("parent_evidence_key", "missing")
+            meta["instruction_evidence"] = {
+                **meta["instruction_evidence"],
+                "cache_key": hashlib.sha256(f"parent-policy-v2:{original}:{parent_key}".encode()).hexdigest(),
+            }
         metas.append(meta)
 
     logger.info(
@@ -590,6 +621,8 @@ def aggregate_metas(metas: list[dict]) -> dict:
     agg: dict = {
         "total_sessions": len(metas),
         "total_messages": 0,
+        "total_user_turns": 0,
+        "total_assistant_messages": 0,
         "total_duration_hours": 0.0,
         "total_input_tokens": 0,
         "total_output_tokens": 0,
@@ -621,6 +654,8 @@ def aggregate_metas(metas: list[dict]) -> dict:
 
     for meta in metas:
         agg["total_messages"] += meta["total_messages"]
+        agg["total_user_turns"] += meta.get("user_message_count", 0)
+        agg["total_assistant_messages"] += meta.get("assistant_message_count", 0)
         agg["total_duration_hours"] += meta["duration_seconds"] / 3600
         agg["total_input_tokens"] += meta["input_tokens"]
         agg["total_output_tokens"] += meta["output_tokens"]

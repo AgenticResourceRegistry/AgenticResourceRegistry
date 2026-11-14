@@ -32,6 +32,7 @@ from services.clickhouse import (
     refresh_session_summary,
 )
 from services.secrets_redactor import redact_secrets
+from services.session_parent_evidence import record_parent_evidence, validate_parent_evidence
 from services.session_parsers.base import token_count, uncached_input_tokens
 from services.session_parsers.ingest_classify import extract_timestamp, get_classifier, get_extra_rows
 from services.session_parsers.kiro import extract_usage as _usage_kiro
@@ -407,6 +408,7 @@ async def ingest_session_lines(
     total_credits: float | None = None,
     parent_session_id: str | None = None,
     session_model: str | None = None,
+    parent_metadata_known: bool = False,
 ) -> IngestResult:
     """Parse, classify, and batch-insert JSONL transcript lines.
 
@@ -429,6 +431,7 @@ async def ingest_session_lines(
         An :class:`IngestResult` with ``ingested``, ``skipped``, and
         ``errors`` counts.
     """
+    validate_parent_evidence(session_id, parent_session_id, parent_metadata_known)
     optic.trace("ingesting session lines for session {}", session_id)
 
     # Normalize agent_id and agent_version so downstream queries match canonical versions.
@@ -453,6 +456,7 @@ async def ingest_session_lines(
         if extra:
             await insert_session_events(extra)
             await refresh_session_summary(session_id, project_id, user_id, harness)
+        await record_parent_evidence(session_id, project_id, user_id, harness, parent_session_id, parent_metadata_known)
         optic.debug("no lines to ingest for session {}", session_id)
         return IngestResult(ingested=0, skipped=0, errors=0)
 
@@ -584,6 +588,7 @@ async def ingest_session_lines(
     if rows or extra:
         await refresh_session_summary(session_id, project_id, user_id, harness)
 
+    await record_parent_evidence(session_id, project_id, user_id, harness, parent_session_id, parent_metadata_known)
     return IngestResult(ingested=ingested, skipped=skipped, errors=errors)
 
 

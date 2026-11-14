@@ -11,6 +11,7 @@ import pytest
 
 
 def _meta(session_id: str, duration: int, tool_count: int) -> dict:
+    """Build scoped fixture metadata with the cache markers required by this pipeline."""
     from services.insights.scope import SessionKey
 
     return {
@@ -43,6 +44,8 @@ def _meta(session_id: str, duration: int, tool_count: int) -> dict:
         "start_time": "2026-01-01T00:00:00Z",
         "harness": "pi",
         "user_message_count": 2,
+        "parent_metadata_known": True,
+        "instruction_evidence": {"state": "verified", "reason": "fixture", "cache_key": "fixture-source"},
     }
 
 
@@ -84,10 +87,12 @@ def test_transcript_falls_back_to_normalized_preview_only_for_prompts():
 
 @pytest.mark.asyncio
 async def test_generate_report_uses_cached_facets_outside_top_sessions(monkeypatch):
+    """Verify generate report uses cached facets outside top sessions."""
     import services.dynamic_settings as ds
     from services.insights import generator
 
     cached_facet = {
+        "_cohort_key": "fixture-source",
         "underlying_goal": "fix a bug",
         "goal_categories": ["fix_bug"],
         "outcome": "mostly_achieved",

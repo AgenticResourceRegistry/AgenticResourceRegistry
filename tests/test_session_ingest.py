@@ -49,6 +49,7 @@ def external_calls(monkeypatch):
         insert=AsyncMock(),
         insert_checkpoint=AsyncMock(),
         refresh=AsyncMock(),
+        parent_evidence=AsyncMock(),
         resolve_agent=AsyncMock(side_effect=lambda value: value),
         resolve_version=AsyncMock(side_effect=lambda _agent_id, value: value),
     )
@@ -56,6 +57,7 @@ def external_calls(monkeypatch):
     monkeypatch.setattr(session_ingest, "query_session_checkpoint", calls.checkpoint)
     monkeypatch.setattr(session_ingest, "query_session_source_manifest", calls.manifest)
     monkeypatch.setattr(session_ingest, "query_source_records_after", calls.records)
+    monkeypatch.setattr(session_ingest, "record_parent_evidence", calls.parent_evidence)
     monkeypatch.setattr(session_ingest, "insert_session_events", calls.insert)
     monkeypatch.setattr(session_ingest, "insert_session_checkpoint", calls.insert_checkpoint)
     monkeypatch.setattr(session_ingest, "refresh_session_summary", calls.refresh)
@@ -1227,3 +1229,34 @@ async def test_agent_name_resolves_only_when_one_live_agent_has_it(monkeypatch):
         assert await session_ingest._resolve_agent_id("planner") == str(unique.id)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_parent_evidence_is_written_on_metadata_only_and_deduplicated_pushes(external_calls):
+    """Accepted ancestry survives a replay with no new canonical source records."""
+    await _ingest([], parent_metadata_known=True)
+    external_calls.parent_evidence.assert_awaited_once_with(SESSION_ID, PROJECT_ID, USER_ID, "claude-code", None, True)
+    external_calls.parent_evidence.reset_mock()
+    raw = PI_USER_PROMPT
+    external_calls.dedup.return_value = {0: xxhash.xxh128(raw.encode()).hexdigest()}
+    external_calls.checkpoint.return_value = (0, 0)
+    await _ingest([raw], harness="pi", parent_metadata_known=True)
+    external_calls.parent_evidence.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_rejected_source_conflict_never_records_parent_declaration(external_calls):
+    """A rejected/changed acknowledged stream cannot introduce new ancestry evidence."""
+    external_calls.dedup.return_value = {0: "different-hash"}
+    external_calls.checkpoint.return_value = (0, 0)
+    with pytest.raises(session_ingest.SessionRecordConflictError):
+        await _ingest([PI_USER_PROMPT], harness="pi", parent_metadata_known=True)
+    external_calls.parent_evidence.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_parent_metadata_write_failure_prevents_successful_ingest_ack(external_calls):
+    """Failure is retryable; callers must not acknowledge a missing declaration."""
+    external_calls.parent_evidence.side_effect = RuntimeError("metadata unavailable")
+    with pytest.raises(RuntimeError, match="metadata unavailable"):
+        await _ingest([], parent_metadata_known=True)
