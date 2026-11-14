@@ -348,7 +348,7 @@ class CopilotCliAdapter(BaseAdapter):
                 pass
         return False
 
-    def rewrite_hooks(self, content: dict, agent_id: str) -> dict:
+    def rewrite_hooks(self, content: dict, agent_id: str, *, path: Path | None = None) -> dict:
         from observal_cli.cmd_pull import _rewrite_copilot_cli_hooks
 
         return _rewrite_copilot_cli_hooks(content, agent_id=agent_id)

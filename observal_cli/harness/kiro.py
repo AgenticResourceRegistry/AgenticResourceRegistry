@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Kiro harness adapter."""
@@ -9,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -31,6 +33,7 @@ from observal_cli.harness import (
 )
 from observal_cli.harness.base import BaseAdapter
 from observal_cli.harness.protocol import HeadlessPlan, HeadlessRequest
+from observal_cli.harness_specs.kiro_hooks_spec import iter_kiro_hooks
 from observal_cli.shared.utils import (
     _OBSERVAL_HOOK_MARKERS,
     extract_mcp_servers,
@@ -57,7 +60,7 @@ def kiro_cli_major(home: Path | None = None) -> int | None:
     if override:
         match = _KIRO_VERSION_RE.search(override)
         return int(match.group(1)) if match else None
-    exe = shutil.which("kiro-cli") or shutil.which("kiro")
+    exe = shutil.which("kiro-cli")
     if not exe:
         return None
     try:
@@ -112,23 +115,69 @@ def strip_ide_hostile_fields(content: dict) -> list[str]:
     return removed
 
 
-def use_inline_hooks(home: Path | None = None) -> bool:
-    """Return True when this machine still needs CLI 2.x inline agent hooks.
+def kiro_cli_engine(home: Path | None = None, cwd: Path | None = None) -> str | None:
+    """Read the saved chat engine; binary major is only the default fallback.
 
-    Inline hooks are the only format a Kiro CLI 2.x understands. The standalone
-    ``.kiro/hooks/*.json`` file replaced them in IDE 1.0 and CLI 3.0, so this
-    turns on the legacy format purely by CLI version.
+    A future launch flag is unknowable at installation time. Re-patch when changing
+    the configured engine so V3 has one invocation route and V2 keeps inline hooks.
+    """
+    override = os.environ.get("OBSERVAL_KIRO_ENGINE", "").strip().lower()
+    if override:
+        return override if override in {"v2", "v3"} else None
+    from observal_cli.sessions.kiro import kiro_home
 
-    Having the IDE installed is deliberately *not* a reason to withhold them.
-    The IDE and the CLI are separate surfaces that can coexist, and a machine
-    with IDE 1.x alongside CLI 2.x needs both formats at once: the standalone
-    file for the IDE, inline hooks for the CLI. Gating on the IDE meant such
-    machines got neither usable format on the CLI side and silently stopped
-    reporting CLI sessions. Inline hooks cost the IDE nothing - it loads an
-    agent carrying them and simply never fires them.
+    config_root = kiro_home(home)
+    home = home or Path.home()
+    # chat.agentEngine is global-only in native Kiro. A workspace cli.json
+    # may contain unrelated overrides, but must not select this setting.
+    paths = [config_root / "settings" / "cli.json"]
+    for path in paths:
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                continue
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            value = data.get("chat.agentEngine")
+            if value in ("v2", "v3"):
+                return value
+    # The native default can change within CLI major 2. Ask only the CLI,
+    # without launching chat or guessing from an IDE executable.
+    if not os.environ.get("OBSERVAL_KIRO_CLI_VERSION"):
+        exe = shutil.which("kiro-cli")
+        if exe:
+            try:
+                proc = subprocess.run(
+                    [exe, "settings", "chat.agentEngine"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd=cwd,
+                    env={**os.environ, "HOME": str(home), "USERPROFILE": str(home)},
+                )
+                match = re.search(r"^\s*(v[23])(?:\s|$)", proc.stdout)
+                if proc.returncode == 0 and match:
+                    return match.group(1)
+            except (OSError, subprocess.SubprocessError):
+                pass
+    major = kiro_cli_major(home)
+    return ("v3" if major >= 3 else "v2") if major is not None else None
+
+
+def use_inline_hooks(home: Path | None = None, *, cwd: Path | None = None) -> bool:
+    """Whether the native global engine (or explicit override) needs inline hooks."""
+    return kiro_cli_engine(home, cwd) == "v2"
+
+
+def needs_inline_compatibility_hooks(home: Path | None = None, *, cwd: Path | None = None) -> bool:
+    """Retain profile hooks when CLI 2.x can be launched with a V2 override.
+
+    This permits fallback hooks. The profile writer omits events already covered
+    by valid standalone hooks when the configured engine is V3.
     """
     major = kiro_cli_major(home)
-    return major is not None and major < 3
+    return (major is not None and major < 3) or use_inline_hooks(home, cwd=cwd)
 
 
 class KiroAdapter(BaseAdapter):
@@ -149,13 +198,25 @@ class KiroAdapter(BaseAdapter):
     def harness_name(self) -> str:
         return "kiro"
 
+    def resolve_home_dir(self):
+        """Allow scanning to find a relocated CLI home instead of the static marker."""
+        from observal_cli.sessions.kiro import kiro_home
+
+        return kiro_home() if os.environ.get("KIRO_HOME", "").strip() else None
+
+    def is_installed(self, home=None):
+        """Detect the same runtime root that session discovery and native Kiro use."""
+        from observal_cli.sessions.kiro import kiro_home
+
+        return kiro_home(home).exists()
+
     def resolve_session_source(self, event: dict[str, Any], home: Path | None = None) -> SessionSource | None:
+        """Resolve the native transcript and attribution within the active Kiro runtime root."""
         from observal_cli.sessions.kiro import find_kiro_jsonl, read_kiro_session_cwd, resolve_session_id
 
         session_id = resolve_session_id(event)
         if not session_id:
             return None
-        home = home or Path.home()
         path = find_kiro_jsonl(session_id, home=home)
         if path is None:
             return None
@@ -218,6 +279,89 @@ class KiroAdapter(BaseAdapter):
                     add(session_dir.name, transcript)
 
         return sources
+
+    def accepts_session_hook(self, source, event, placement="", home=None):
+        """Prefer standalone delivery for an observed V3/IDE transcript, not a saved default.
+
+        Inline-only V3 installations still work. V2 overrides retain their inline
+        route, and older commands without placement tags use the durable guard.
+        """
+        from observal_cli.sessions.kiro import is_ide_transcript
+
+        if placement != "inline" or source.path is None or not is_ide_transcript(source.path):
+            return True
+        from observal_cli.sessions.kiro import kiro_home
+
+        scopes = [kiro_home(home)]
+        if source.cwd:
+            scopes.append(Path(source.cwd) / ".kiro")
+        event_name = str(event.get("hook_event_name") or event.get("hookEventName") or event.get("event") or "")
+        trigger = {"stop": "Stop", "userpromptsubmit": "UserPromptSubmit"}.get(event_name.lower())
+        return trigger is None or not any(trigger in self._v1_hook_events(scope) for scope in scopes)
+
+    def is_session_final(self, event: dict[str, Any]) -> bool:
+        """Only Stop creates final authority; SessionEnd is capture-only metadata."""
+        name = str(
+            event.get("hook_event_name") or event.get("hookEventName") or event.get("event") or event.get("type") or ""
+        )
+        return name.lower() == "stop"
+
+    def session_delivery_guard(self, source, event, config, *, related=(), final=False, home=None):
+        """Deduplicate acknowledged Kiro hooks across both placements and workers."""
+        from observal_cli.sessions.delivery_guard import kiro_delivery_guard
+
+        requested = not final and self.is_session_final(event)
+        event_name = str(event.get("hook_event_name") or event.get("hookEventName") or event.get("event") or "")
+        finalizable = tuple(
+            item for item in [source, *related] if (requested or final) and self.should_capture_session(item, home=home)
+        )
+        return kiro_delivery_guard(
+            source,
+            event,
+            config,
+            related=related,
+            final=final,
+            final_requested=requested,
+            cancel_final_requested=event_name.lower() == "userpromptsubmit",
+            require_final_intent=final,
+            expected_generation=event.get("_observal_finalization_generation"),
+            finalizable=finalizable,
+            home=home,
+        )
+
+    def session_outbox_context(self, source, config, home=None):
+        """Bind every queued final source, including children, to its guarded parent Stop."""
+        from observal_cli.sessions.delivery_guard import kiro_outbox_context
+
+        return kiro_outbox_context(source)
+
+    def session_outbox_guard(self, item, config, *, home=None, db_path=None):
+        """Reject superseded final semantics even in a public command's pre-group drain."""
+        from observal_cli.sessions.delivery_guard import kiro_outbox_guard
+
+        return kiro_outbox_guard(item, config, home=home, db_path=db_path)
+
+    def session_finalization_generation(self, source, config, home=None):
+        """A retained V2 worker may finish only the Stop that scheduled it."""
+        from observal_cli.sessions.delivery_guard import kiro_finalization_generation
+
+        return kiro_finalization_generation(source, config, home)
+
+    def reconcile_only_finalization(self, source):
+        """V3/IDE hook descendants are killed at shutdown; finish via foreground reconcile."""
+        from observal_cli.sessions.kiro import is_ide_transcript
+
+        return is_ide_transcript(source.path)
+
+    def session_reconciliation_final(self, source, config, home=None):
+        """Only an explicit Stop authorizes Kiro finalization, never inactivity alone."""
+        return self.session_finalization_pending(source, config, home=home)
+
+    def session_finalization_pending(self, source, config, home=None):
+        """Recover an explicit Stop request without finalizing permission-paused sessions."""
+        from observal_cli.sessions.delivery_guard import kiro_finalization_pending
+
+        return kiro_finalization_pending(source, config, home=home)
 
     def session_extra_records(
         self,
@@ -358,20 +502,28 @@ class KiroAdapter(BaseAdapter):
         final: bool,
         home: Path | None = None,
     ) -> dict[str, Any]:
-        from observal_cli.sessions.kiro import read_kiro_credits
+        """Collect bounded companion model metadata and available lifetime credits for durable delivery."""
+        from observal_cli.sessions.kiro import read_kiro_credits, read_kiro_session_model
 
+        fields: dict[str, Any] = {}
+        model = read_kiro_session_model(source.path)
+        if model:
+            fields["session_model"] = model
         attempts = 5 if final else 1
         for attempt in range(attempts):
             credits = read_kiro_credits(source.session_id, home=home)
             if credits is not None:
-                return {"total_credits": credits}
+                fields["total_credits"] = credits
+                return fields
             if attempt < attempts - 1:
                 time.sleep(0.5 * (attempt + 1))
-        return {}
+        return fields
 
     def scan_home(self, home: Path | None = None) -> ScanResult:
-        home = home or Path.home()
-        kiro_dir = home / ".kiro"
+        """Scan installed Kiro resources in the resolved user runtime root."""
+        from observal_cli.sessions.kiro import kiro_home
+
+        kiro_dir = kiro_home(home)
         if not kiro_dir.exists():
             return ScanResult()
         return self._scan_kiro_dir(kiro_dir)
@@ -400,8 +552,10 @@ class KiroAdapter(BaseAdapter):
             return ScanResult()
 
     def discover_home(self, home: Path | None = None) -> AdapterDiscoveryResult:
-        home = home or Path.home()
-        return self._discover_kiro_root(home / ".kiro", DiscoveryScope.USER, home=home)
+        """Discover user-scoped resources without assuming the default Kiro home."""
+        from observal_cli.sessions.kiro import kiro_home
+
+        return self._discover_kiro_root(kiro_home(home), DiscoveryScope.USER, home=home or Path.home())
 
     def discover_project(self, project_dir: Path) -> AdapterDiscoveryResult:
         return self._discover_kiro_root(
@@ -445,50 +599,89 @@ class KiroAdapter(BaseAdapter):
         alone would show a healthy status for a surface that is in fact silent.
         Such a machine is judged on its inline hooks instead.
         """
-        v1_readable = not use_inline_hooks() or kiro_ide_installed()
-        if v1_readable and self._v1_hooks_installed(config_dir):
+        events = self._v1_hook_events(config_dir)
+        v1_readable = bool(events) and (kiro_cli_engine() != "v2" or kiro_ide_installed())
+        if v1_readable and events == {"Stop", "UserPromptSubmit"}:
             return "installed"
+        standalone_status = "partial" if v1_readable else "missing"
 
         agents_dir = config_dir / "agents"
         if not agents_dir.is_dir():
-            return "missing"
+            return standalone_status
         agent_profiles = [f for f in agents_dir.glob("*.json") if f.stem != "kiro_default"]
         if not agent_profiles:
-            return "missing"
+            return standalone_status
         hooked = 0
         for af in agent_profiles:
             try:
                 data = json.loads(af.read_text())
-                hooks = data.get("hooks", {})
-                for _evt, entries in hooks.items():
-                    if isinstance(entries, list) and any(
-                        any(m in h.get("command", "") for m in _OBSERVAL_HOOK_MARKERS)
-                        for h in entries
-                        if isinstance(h, dict)
-                    ):
-                        hooked += 1
-                        break
+                if not isinstance(data, dict):
+                    continue
+                if any(
+                    any(marker in hook.command for marker in _OBSERVAL_HOOK_MARKERS)
+                    for hook in iter_kiro_hooks(data.get("hooks"))
+                ):
+                    hooked += 1
             except (json.JSONDecodeError, OSError):
                 pass
         if hooked == len(agent_profiles):
             return "installed"
-        return "partial" if hooked > 0 else "missing"
+        return "partial" if hooked > 0 else standalone_status
 
     @staticmethod
-    def _v1_hooks_installed(config_dir: Path) -> bool:
-        from observal_cli.harness_specs.kiro_hooks_spec import (
-            KIRO_V1_HOOK_FILENAME,
-            is_observal_v1_hook,
-        )
+    def _v1_hook_events(config_dir: Path, *, include_metadata: bool = False) -> set[str]:
+        """Return only lifecycle triggers backed by enabled session-push commands.
 
-        hooks_file = config_dir / "hooks" / KIRO_V1_HOOK_FILENAME
+        Ownership is useful for rewriting, not proof of delivery. Require the v1
+        schema, a command action, and a Python launch of the session-push module.
+        This is structural health, not proof that a binary or network is available.
+        """
+        from observal_cli.harness_specs.kiro_hooks_spec import KIRO_V1_HOOK_FILENAME
+
         try:
-            data = json.loads(hooks_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            return False
-        if not isinstance(data, dict):
-            return False
-        return any(is_observal_v1_hook(h) for h in data.get("hooks") or [])
+            data = json.loads((config_dir / "hooks" / KIRO_V1_HOOK_FILENAME).read_text())
+        except (ValueError, OSError):
+            return set()
+        return KiroAdapter._v1_hook_events_in(data, include_metadata=include_metadata)
+
+    @staticmethod
+    def _v1_hook_events_in(data: object, *, include_metadata: bool = False) -> set[str]:
+        """Validate in-memory hook content using the same rules as on-disk coverage."""
+        if not isinstance(data, dict) or data.get("version") != "v1" or data.get("enabled") is False:
+            return set()
+        hooks = data.get("hooks")
+        if not isinstance(hooks, list):
+            return set()
+        events = set()
+        triggers = {"Stop", "UserPromptSubmit"} | ({"SessionEnd"} if include_metadata else set())
+        for hook in hooks:
+            if not isinstance(hook, dict) or hook.get("enabled") is False or hook.get("disabled") is True:
+                continue
+            trigger, action = hook.get("trigger"), hook.get("action")
+            if trigger not in triggers or not isinstance(action, dict):
+                continue
+            command = action.get("command")
+            if action.get("type") != "command" or not isinstance(command, str) or not command.strip():
+                continue
+            try:
+                argv = shlex.split(command)
+            except ValueError:
+                continue
+            if argv and argv[0] == "env":
+                argv.pop(0)
+            while argv and re.match(r"^[A-Za-z_]\w*=", argv[0]):
+                argv.pop(0)
+            if not argv or not re.fullmatch(r"pythonw?(?:\d+(?:\.\d+)*)?(?:\.exe)?", re.split(r"[/\\]", argv[0])[-1]):
+                continue
+            module = "observal_cli.hooks.session_push"
+            module_launch = any(argv[i : i + 2] == ["-m", module] for i in range(1, len(argv)))
+            bootstrap_launch = any(
+                argv[i] == "-c" and re.search(r"runpy\.run_module\(['\"]" + re.escape(module) + r"['\"]", argv[i + 1])
+                for i in range(1, len(argv) - 1)
+            )
+            if module_launch or bootstrap_launch:
+                events.add(trigger)
+        return events
 
     # ── Private scanning helpers ──────────────────────────────────
 
@@ -525,6 +718,8 @@ class KiroAdapter(BaseAdapter):
                     continue
                 try:
                     data = json.loads(agent_profile.read_text())
+                    if not isinstance(data, dict):
+                        continue
                     name = data.get("name", agent_profile.stem)
                     desc = data.get("description") or ""
                     model = data.get("model") or ""
@@ -554,19 +749,14 @@ class KiroAdapter(BaseAdapter):
                                 )
                             )
 
-                    agent_hooks = data.get("hooks", {})
-                    for event_name, event_handlers in agent_hooks.items():
-                        hook_name = f"kiro:{name}/{event_name}"
-                        handler_config = {}
-                        if isinstance(event_handlers, list) and event_handlers:
-                            handler_config = event_handlers[0] if isinstance(event_handlers[0], dict) else {}
+                    for hook in iter_kiro_hooks(data.get("hooks")):
                         hooks.append(
                             DiscoveredHook(
-                                name=hook_name,
-                                event=event_name,
-                                handler_type="command",
-                                handler_config=handler_config,
-                                description=f"Kiro hook: {event_name} on agent {name}",
+                                name=f"kiro:{name}/{hook.name or hook.trigger}",
+                                event=hook.trigger,
+                                handler_type=str(hook.handler.get("type") or "command"),
+                                handler_config=hook.handler,
+                                description=f"Kiro hook: {hook.trigger} on agent {name}",
                                 source=f"kiro:agent:{name}",
                             )
                         )
@@ -622,6 +812,7 @@ class KiroAdapter(BaseAdapter):
         home: Path | None = None,
         project_dir: Path | None = None,
     ) -> AdapterDiscoveryResult:
+        """Collect resources and diagnostics from one explicitly scoped Kiro root."""
         scanner = RichAdapterScanner(
             harness=self.harness_name,
             scope=scope,
@@ -665,7 +856,8 @@ class KiroAdapter(BaseAdapter):
                 source=agent_source,
                 description_prefix=f"From Kiro agent: {name}",
             )
-            scanner.add_hooks_mapping(
+            self._add_kiro_hooks(
+                scanner,
                 agent_path,
                 data.get("hooks", {}),
                 name_prefix=f"kiro:{name}",
@@ -679,7 +871,8 @@ class KiroAdapter(BaseAdapter):
             if data is None:
                 continue
             if "hooks" in data:
-                scanner.add_hooks_mapping(
+                self._add_kiro_hooks(
+                    scanner,
                     hook_path,
                     data["hooks"],
                     name_prefix=f"kiro:{hook_path.stem}",
@@ -716,12 +909,76 @@ class KiroAdapter(BaseAdapter):
             )
         return scanner.finish()
 
-    def rewrite_agent_profile(self, content: dict, agent_id: str) -> dict:
+    @staticmethod
+    def _add_kiro_hooks(
+        scanner: RichAdapterScanner, path: Path, hooks: object, *, name_prefix: str, source: str
+    ) -> None:
+        """Normalize hook formats into redacted discovery records without coercing bad metadata."""
+        if not isinstance(hooks, (dict, list)):
+            scanner.diagnostic(
+                DiagnosticCode.METADATA_MALFORMED, path, "Kiro hook collection must be an object or array"
+            )
+            return
+        for hook in iter_kiro_hooks(hooks):
+            safe_handler = redact_value(hook.handler)
+            scanner.add_component(
+                DiscoveredHook(
+                    name=redact_text(f"{name_prefix}/{hook.name or hook.trigger}"),
+                    event=redact_text(hook.trigger),
+                    handler_type=redact_text(str(hook.handler.get("type") or "command")),
+                    handler_config=safe_handler if isinstance(safe_handler, dict) else {},
+                    description=redact_text(f"Hook from {name_prefix}: {hook.trigger}"),
+                    source=source,
+                ),
+                path,
+            )
+
+    def merge_agent_profile(self, content: dict, path: Path) -> dict:
+        """Retain local hooks and V3 upgrade state on re-pull.
+
+        The server supplies the current prompt/model and installs Registry hook
+        components into standalone files. Inline hooks and permissions on disk
+        belong to the local profile; refresh only Observal's entries afterward.
+        """
+        from observal_cli.errors import ErrorCategory, fail
+
+        if not path.exists():
+            return content
+        try:
+            existing = json.loads(path.read_text())
+            if not isinstance(existing, dict):
+                raise ValueError("Kiro agent profile must be an object")
+            if "hooks" in existing and not isinstance(existing["hooks"], (dict, list)):
+                raise ValueError("Kiro profile hooks must be an object or array")
+        except ValueError as error:
+            fail(
+                ErrorCategory.VALIDATION,
+                "Cannot refresh an invalid Kiro agent profile.",
+                operation="Pull agent",
+                resource=str(path),
+                remediation="Repair the local profile and retry; its contents were not overwritten.",
+                detail=repr(error),
+            )
+        merged = dict(content)
+        for field in ("hooks", "permissions", "kiroUpgrade"):
+            if field in existing:
+                merged[field] = existing[field]
+        # Kiro's universal upgrade retains legacy tool fields alongside V3
+        # permissions. Dropping them changes its classification to V3-only.
+        if isinstance(existing.get("kiroUpgrade"), dict):
+            for field in ("allowedTools", "toolsSettings"):
+                if field in existing:
+                    merged[field] = existing[field]
+        return merged
+
+    def rewrite_agent_profile(
+        self, content: dict, agent_id: str, *, path: Path | None = None, standalone_events: set[str] | None = None
+    ) -> dict:
         from observal_cli.cmd_pull import _rewrite_kiro_agent_profile
 
-        return _rewrite_kiro_agent_profile(content, agent_id=agent_id)
+        return _rewrite_kiro_agent_profile(content, agent_id=agent_id, path=path, standalone_events=standalone_events)
 
-    def rewrite_hooks(self, content: dict, agent_id: str) -> dict:
+    def rewrite_hooks(self, content: dict, agent_id: str, *, path: Path | None = None) -> dict:
         """Refresh the standalone v1 hooks file.
 
         ``agent_id`` is accepted for protocol compatibility and deliberately
@@ -730,7 +987,56 @@ class KiroAdapter(BaseAdapter):
         """
         from observal_cli.harness_specs.kiro_hooks_spec import merge_kiro_hooks_file
 
-        return merge_kiro_hooks_file(content)
+        merged = merge_kiro_hooks_file(content)
+        if (
+            path is not None
+            and path.parent.parent.resolve() not in {self._user_hook_root(), (Path.home() / ".kiro").resolve()}
+            and kiro_cli_engine(cwd=path.parent.parent.parent) == "v3"
+        ):
+            merged = self._omit_covered_hooks(
+                merged, self._v1_hook_events(self._user_hook_root(), include_metadata=True)
+            )
+        return merged
+
+    @staticmethod
+    def _user_hook_root() -> Path:
+        """Resolve the same user scope as native Kiro, including KIRO_HOME."""
+        from observal_cli.sessions.kiro import kiro_home
+
+        return kiro_home().resolve()
+
+    @staticmethod
+    def _omit_covered_hooks(content: dict, covered: set[str]) -> dict:
+        """Keep user hooks but omit telemetry events already supplied by another scope."""
+        from observal_cli.harness_specs.kiro_hooks_spec import is_observal_v1_hook
+
+        return {
+            **content,
+            "hooks": [
+                h for h in content.get("hooks", []) if not (is_observal_v1_hook(h) and h.get("trigger") in covered)
+            ],
+        }
+
+    @classmethod
+    def profile_workspace(cls, path: Path | None = None) -> Path:
+        """Use the profile's target workspace, or the active cwd for a shared user profile."""
+        scope = (path.parent.parent if path is not None else Path.cwd() / ".kiro").resolve()
+        return Path.cwd() if scope == cls._user_hook_root() else scope.parent
+
+    @classmethod
+    def profile_standalone_events(cls, path: Path | None = None) -> set[str]:
+        """Return valid user/project coverage for this profile's configured V3 engine."""
+        user = cls._user_hook_root()
+        scope = (path.parent.parent if path is not None else Path.cwd() / ".kiro").resolve()
+        if scope == (Path.home() / ".kiro").resolve() and scope != user:
+            # This file belongs to a different, currently unselected runtime home.
+            # Its inline route must not depend on coverage in the relocated root.
+            return set()
+        cwd = cls.profile_workspace(path)
+        covered = cls._v1_hook_events(user) | cls._v1_hook_events(scope)
+        if not covered or kiro_cli_engine(cwd=cwd) != "v3":
+            return set()
+        return covered
 
     def patch_hooks(self, dry_run: bool) -> bool:
         from observal_cli.cmd_doctor import _patch_kiro

@@ -2,72 +2,97 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Overview"
+title: "Self-host a registry"
+description: "Choose a deployment artifact and verify access, configuration, storage, and recovery."
 ---
 
-Run Agentic Resource Registry entirely on your own infrastructure. No SaaS, no egress, every byte of telemetry stays inside your network.
+Run the registry on infrastructure you control. Self-hosting determines where the registry stores data; it does not guarantee zero network egress. Image downloads, identity providers, remote resources, and configured insights/model providers can make outbound requests. Review those integrations and your data-handling policy before deployment.
 
-For a packaged single-node install, `install-server.sh` generates restricted credential files under `secrets/`, records their `NAME_FILE` paths in `.env`, and binds host ports to loopback. It prompts when a terminal is available and applies the same safe defaults automatically in headless CI or agent environments. The source Compose path remains available for development and accepts direct `.env` values.
+The packaged single-node installer is designed to generate restricted credential files under `secrets/`, record their `NAME_FILE` paths in `.env`, and bind new host ports to loopback. The source Compose path remains available for development and accepts direct `.env` values.
+
+### First login after the packaged install
+
+When `install-server.sh` finishes (select the release with `--version 1.17.0`), setup prints the dashboard URL, the API URL for the CLI, and a generated administrator password:
+
+- Open the dashboard at the **Frontend URL** you entered (default `http://localhost:3000`). That prompt sets the frontend/CORS origin, **not** the published port.
+- Use the printed server URL (default `http://localhost:8000`) as the CLI server, and check it with `curl http://localhost:8000/health`. If you change the bind address or `API_HOST_PORT`, use the URL setup prints instead; the CLI command remains `observal`.
+- Log in as `super@demo.example` with the generated password. Setup also stores it in `secrets/demo_super_admin_password` under the install directory (`~/.observal` on macOS, `/opt/observal` on Linux). Change it after logging in.
+
+Self-registration is off by default. To give someone a personal account, log in as an administrator and run `observal admin create-user alice@example.com 'Alice Smith' --role user`; see [user management](/cli/admin).
 
 ## Architecture at a glance
+
+The inventory below describes `docker/docker-compose.yml` in this documentation's source revision, not every deployment artifact. It has **eight core services**. The init service runs migrations and exits; it is not a continuously running application process.
 
 ```mermaid
 flowchart TB
     engineers[Engineers]
-    web["observal-web - static web UI"]
-    api["observal-api - FastAPI backend"]
-    worker["observal-worker - async jobs"]
-    db["observal-db - Postgres"]
-    redis["observal-redis - jobs + pub/sub"]
-    ch["observal-clickhouse - telemetry"]
-    grafana["observal-grafana - optional dashboards"]
+    lb[Load balancer]
+    web[Web UI]
+    api[API]
+    init[Init: migrations]
+    worker[Worker]
+    db[(PostgreSQL)]
+    redis[(Redis)]
+    ch[(ClickHouse)]
 
-    engineers --> web
-    web <--> api
-    api --> worker
+    engineers --> lb
+    lb --> web
+    lb --> api
+    init --> db
+    init --> ch
     api --> db
     api --> redis
     api --> ch
     worker --> db
     worker --> redis
     worker --> ch
-    grafana --> ch
 ```
 
-**Seven services:**
+| Core service | Source image or build | Purpose |
+| --- | --- | --- |
+| `observal-init` | `docker/Dockerfile.api` | Run database migrations, then exit |
+| `observal-api` | `docker/Dockerfile.api` | Serve the registry API |
+| `observal-web` | `docker/Dockerfile.web` | Serve the web UI |
+| `observal-lb` | `nginx:1.31-alpine` | Route UI and API requests |
+| `observal-db` | `postgres:18` | Store users, resources, reviews, and settings |
+| `observal-clickhouse` | `clickhouse/clickhouse-server:26.6` | Store session and audit evidence |
+| `observal-redis` | `redis:8-alpine` | Queue jobs, cache settings, and coordinate runtime services |
+| `observal-worker` | `docker/Dockerfile.api` | Run background jobs |
 
-| Service               | Image                               | Ports      | Purpose                   |
-| --------------------- | ----------------------------------- | ---------- | ------------------------- |
-| `observal-api`        | built from `docker/Dockerfile.api`  | 8000       | FastAPI backend           |
-| `observal-web`        | built from `docker/Dockerfile.web`  | 3000       | Vite web UI               |
-| `observal-db`         | `postgres:16`                       | 5432       | Registry, users, config   |
-| `observal-clickhouse` | `clickhouse/clickhouse-server:26.3` | 8123       | Session and audit events |
-| `observal-redis`      | `redis:7-alpine`                    | 6379       | Job queue (arq) + pub/sub |
-| `observal-worker`     | built from `docker/Dockerfile.api`  | (internal) | Background async jobs     |
-| `observal-grafana`    | `grafana/grafana-oss:11.6.5`        | 3001       | Dashboards (optional)     |
+Prometheus and Grafana are **optional overlay services**, not part of the eight-service core. `docker/docker-compose.observability.yml` adds Prometheus; its `grafana` profile enables Grafana:
 
-All services run on a private `observal-net` bridge network. Named volumes (`pgdata`, `chdata`, `redisdata`, `grafanadata`, `apidata`) hold persistent data.
+| Optional service | Overlay image | Purpose |
+| --- | --- | --- |
+| `observal-prometheus` | `prom/prometheus:v3.12.0` | Collect operational metrics |
+| `observal-grafana` | `grafana/grafana-oss:13.0.2` | View operational dashboards |
 
-## Deployment tiers
+Core services share the `observal-net` network and persistent volumes `pgdata`, `chdata`, `redisdata`, and `apidata`. The Grafana overlay adds `grafanadata`. Network membership does not prevent exposure through published host ports; inspect [ports and volumes](/self-hosting/ports-and-volumes) before sharing the instance.
 
-Choose the deployment model that fits your team:
+The downloadable server package has its own Compose files, image-version selection, and host bindings. Read the files shipped with your chosen release rather than applying source-stack defaults to it. See [documentation and software versions](/reference/documentation-version) and [requirements](/self-hosting/requirements).
 
-|                    | [Single-node](/self-hosting/single-node-deploy) | [Kubernetes](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/self-hosting/kubernetes-helm.md) | [Production](/self-hosting/production-deploy)    |
-| ------------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| **How**            | Docker Compose on one VM             | Official Helm chart                                                                                 | Terraform on AWS or GCP               |
-| **Best for**       | ≤50 users, internal tools, POCs      | Cloud-native teams, existing K8s infra                                                              | Enterprise, SLA-bound, 50+ users      |
-| **Cost**           | $20 to $150/mo                       | Variable                                                                                            | \~$180 to $255/mo                     |
-| **HA**             | No                                   | Pod resilience & horizontal scaling                                                                 | Yes (Multi-AZ databases, autoscaling) |
-| **Time to deploy** | 10 minutes                           | 10 to 15 minutes                                                                                    | 20 to 30 minutes                      |
+## Choose the deployment artifact
+
+Use the artifact you intend to operate, not a universal command copied from another deployment type:
+
+| Path | When to use it | What to verify |
+| --- | --- | --- |
+| [Source Compose](/self-hosting/docker-compose) | Development evaluation or a deliberately maintained source deployment | Selected revision, effective environment, ports, migrations, and volume ownership. |
+| Downloaded server package | A release-based single-node installation | Selected image tag, shipped files/secret mounts, staging versus cutover, and compatible shell. |
+| [Kubernetes](/self-hosting/kubernetes-helm) | An existing Kubernetes operating environment | Chart/release compatibility, external storage, identity, migration ordering, and ingress. |
+| [Cloud deployment](/self-hosting/production-deploy) | A reviewed AWS/GCP infrastructure deployment | Resource topology, IAM, backups, rollout, networking, and failure recovery. |
+
+Templates do not guarantee availability, capacity, cost, or a fixed deployment time. Measure the intended workload and review the actual infrastructure plan. If your team already has a registry, use [existing-registry onboarding](/getting-started/onboarding) instead of deploying another server.
 
 **Start here:**
 
 | If you want to...                | Read                                                                                                                     |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | Deploy on a single VM (simplest) | [Single-node deployment](/self-hosting/single-node-deploy)                                                                          |
-| Deploy on Kubernetes with Helm   | [Kubernetes deployment with Helm](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/self-hosting/kubernetes-helm.md) |
-| Deploy a production HA stack     | [Production deployment](/self-hosting/production-deploy)                                                                            |
+| Deploy on Kubernetes with Helm   | [Kubernetes deployment with Helm](/self-hosting/kubernetes-helm) |
+| Review a production cloud deployment     | [Production deployment](/self-hosting/production-deploy)                                                                            |
 | Deploy on AWS specifically       | [AWS deployment with Terraform](/self-hosting/aws-terraform)                                                                        |
 | Deploy on GCP specifically       | [GCP deployment with Terraform](/self-hosting/gcp-terraform)                                                                        |
 
@@ -94,9 +119,10 @@ Before putting Agentic Resource Registry in front of real users:
 2. **Protect database passwords**: server-package setup generates restricted PostgreSQL and ClickHouse credential files; source deployments must replace the `.env.example` defaults.
 3. **Scope `CORS_ALLOWED_ORIGINS`** to your real frontend host.
 4. **Configure SSO** in **Admin → SSO**, including `deployment.sso_only` if you want SSO-only login.
-5. **Tune rate limits** (`RATE_LIMIT_AUTH`, `RATE_LIMIT_AUTH_STRICT`).
-6. **Set `DATA_RETENTION_DAYS`** to match your retention policy (default 90 days).
+5. **Configure auth rate limits** through `security.rate_limit_auth` and `security.rate_limit_auth_strict`, then verify startup-bound behavior.
+6. **Set `data.retention_days` and the separate application retention policy** to match privacy/storage requirements; verify the actual TTL.
 7. **Back up the JWT key volume** (`apidata`): losing it invalidates every session.
-8. **Remove demo accounts**: remove `DEMO_*` variables and generated demo password files before a real deployment, then delete any already-seeded demo users.
+8. **Remove demo access**: explicitly clear source service defaults or review packaged credential files, then remove existing demo users through an authorized account. See [demo configuration](/self-hosting/configuration#demo-accounts).
+9. **Review outbound reporting and providers**: [usage reporting](/self-hosting/usage-reporting) is enabled by default; self-hosting is not a zero-egress guarantee.
 
 Each of these is covered in the linked deep-dive below. Start with [Requirements](/self-hosting/requirements).

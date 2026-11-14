@@ -126,8 +126,8 @@ export function useComponentInsightReports(type: string, id: string, enabled: bo
 export function useGenerateComponentInsight() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { type: string; id: string; periodDays?: number; versionId?: string }) =>
-      insights.generateComponent(vars.type, vars.id, vars.periodDays, vars.versionId),
+    mutationFn: (vars: { type: string; id: string; periodDays?: number; versionId?: string; includeDiscoveryOptimization?: boolean }) =>
+      insights.generateComponent(vars.type, vars.id, vars.periodDays, vars.versionId, vars.includeDiscoveryOptimization),
     onSuccess: (_report, vars) => {
       void qc.invalidateQueries({ queryKey: ["insights", "component-reports", vars.type, vars.id] });
       toast.success("Component report queued");
@@ -205,8 +205,8 @@ export function useLegacyInsightReport(reportId: string) {
 export function useGenerateInsight() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { agentId: string; periodDays?: number; agentVersion?: string; comparisonAgentVersion?: string }) =>
-      insights.generate(vars.agentId, vars.periodDays, vars.agentVersion, vars.comparisonAgentVersion),
+    mutationFn: (vars: { agentId: string; periodDays?: number; agentVersion?: string; comparisonAgentVersion?: string; includeDiscoveryOptimization?: boolean }) =>
+      insights.generate(vars.agentId, vars.periodDays, vars.agentVersion, vars.comparisonAgentVersion, vars.includeDiscoveryOptimization),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["insights", "reports", vars.agentId] });
       toast.success("Insight report queued");
@@ -220,14 +220,23 @@ export function useGenerateInsight() {
 export function useApplyInsightSuggestions() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { agentId: string; reportId: string; selection?: { config_indices?: number[]; feature_indices?: number[]; pattern_indices?: number[] } }) =>
+    mutationFn: (vars: { agentId: string; reportId: string; selection: import("@/lib/types").InsightApplySelection }) =>
       insights.applySuggestions(vars.agentId, vars.reportId, vars.selection),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["insights", "report", vars.agentId, vars.reportId] });
-      toast.success("Suggestions applied: items added to review queue");
+      toast.success("Submitted for review; registry publication is pending");
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to apply suggestions");
     },
   });
+}
+
+
+export function usePreviewInsightSuggestions() {
+    return useMutation({
+        mutationFn: (vars: { agentId: string; reportId: string; selection: import("@/lib/types").InsightApplySelection }) =>
+            insights.previewSuggestions(vars.agentId, vars.reportId, vars.selection),
+        onError: (err: Error) => toast.error(err.message || "Failed to preview selected suggestions"),
+    });
 }

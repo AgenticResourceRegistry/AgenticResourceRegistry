@@ -52,6 +52,7 @@ from observal_cli.cmd_doctor import (
     doctor_app,
     doctor_patch,
 )
+from observal_cli.harness import ensure_loaded
 from observal_cli.shared.utils import is_observal_hook_entry, is_observal_matcher_group
 from observal_shared.opencode_plugin_source import OPENCODE_PLUGIN_SOURCE
 
@@ -64,11 +65,16 @@ CLI_VERSION = "2.0.0"
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    for name in ("KIRO_HOME", "OBSERVAL_KIRO_ENGINE", "OBSERVAL_KIRO_CLI_VERSION", "OBSERVAL_KIRO_IDE"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr("observal_cli.settings_reconciler.CLAUDE_SETTINGS_PATH", tmp_path / ".claude/settings.json")
     monkeypatch.setattr("observal_cli.settings_reconciler.config.save", lambda updates: None)
     monkeypatch.setattr("observal_cli.lockfile.LOCKFILE_PATH", tmp_path / ".observal/lockfile.json")
     monkeypatch.setattr("observal_cli.lockfile._LOCKFILE_LOCK", tmp_path / ".observal/lockfile.lock")
     monkeypatch.setattr(pi_extension, "get_current_version", lambda: CLI_VERSION)
+    # Direct doctor helper calls must not depend on another test loading adapters.
+    ensure_loaded()
     return tmp_path
 
 
@@ -393,7 +399,7 @@ class TestPatchFunctions:
 
         hooks = read_json(tmp_path / ".kiro/hooks/observal.json")
         assert hooks["version"] == "v1"
-        assert [h["trigger"] for h in hooks["hooks"]] == ["UserPromptSubmit", "Stop"]
+        assert [h["trigger"] for h in hooks["hooks"]] == ["UserPromptSubmit", "Stop", "SessionEnd"]
         # No locked agent means no attribution to bake in; Kiro resolves the
         # active agent from session metadata anyway.
         assert all("OBSERVAL_AGENT_ID" not in h["action"]["command"] for h in hooks["hooks"])
@@ -410,8 +416,8 @@ class TestPatchFunctions:
             "load",
             lambda: {"server_url": "http://localhost:80", "access_token": "test-token"},
         )
-        # Pin the hook format: whether the developer running the suite happens to
-        # have Kiro IDE installed must not decide what this test asserts.
+        # Pin the inline route even when the working directory selects V3.
+        monkeypatch.setenv("OBSERVAL_KIRO_ENGINE", "v2")
         monkeypatch.setattr(kiro_adapter, "use_inline_hooks", lambda *_a, **_k: True)
         write_json(tmp_path / ".kiro/agents/test-agent.json", {"name": "test-agent", "hooks": {}})
         lockfile.upsert_agent(

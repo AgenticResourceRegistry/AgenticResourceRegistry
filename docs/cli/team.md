@@ -1,10 +1,11 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal team"
 ---
 
-Create and govern teamspaces, members, visibility reviews, join requests, and private-team invitations.
+Create and govern teamspaces, members, visibility reviews, join requests, and private-team invitations. For the owner/recipient journey and publication boundaries, start with [Work in a teamspace](/use-cases/teamspaces).
 
 Every leaf command supports `--output table|json`. JSON success output contains no Rich text or prompts. JSON failures leave stdout empty and write one categorized error object to stderr.
 
@@ -126,7 +127,7 @@ observal team request mine platform-tools --output json
 observal team request withdraw platform-tools --yes --output json
 ```
 
-`request mine` returns the standard list envelope with requests ordered newest first. `request withdraw` finds the caller's pending request and marks it cancelled. Human mode prompts unless `--yes` is supplied. JSON mode requires `--yes` and returns an empty object.
+`request mine` returns the standard list envelope with requests ordered newest first. It requires current team visibility: a private-team nonmember can receive not-found even with a pending invitation request. The invitation preview is the supported way to inspect that invitation's caller request state before admission; do not assume this command or withdrawal can bypass private-team visibility. `request withdraw` finds the caller's pending request and marks it cancelled. Human mode prompts unless `--yes` is supplied. JSON mode requires `--yes` and returns an empty object.
 
 Owners and deployment admins can list and decide requests:
 
@@ -155,7 +156,7 @@ Roles are `member`, `reviewer`, and `owner`. Adding an existing member updates t
 
 Member list returns the standard list envelope. Add returns the saved member. Remove currently returns an empty object.
 
-Human remove prompts unless `--yes` is supplied. JSON remove requires `--yes`.
+Human remove prompts unless `--yes` is supplied. JSON remove requires `--yes`. Removal changes registry access, not already downloaded files or independently supplied credentials; follow the [separate offboarding actions](/use-cases/teamspaces#offboarding).
 
 ## Private-team invitations
 
@@ -184,7 +185,7 @@ observal team invite request INVITE_TOKEN \
   --output json
 ```
 
-`invite preview` does not mutate membership or request state. `invite request` does not grant membership. It creates a pending join request that an owner must approve. Neither command prints the token in human output or errors.
+`invite preview` does not mutate membership or request state. Inspect `valid`, `invite_state`, `is_member`, and `request.status`; an invalid/revoked invitation can return successful JSON with `valid: false`, not a command failure. `invite request` does not grant membership. It creates a pending join request that an owner must approve. Neither command prints the token in human output or errors.
 
 Owners and admins can inspect invitation usage:
 

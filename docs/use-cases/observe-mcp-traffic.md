@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Observe MCP activity in sessions"
 ---
@@ -22,11 +23,11 @@ Coverage varies by harness because Agentic Resource Registry can only index fiel
 ## Discover and install session hooks
 
 ```bash
-observal scan
-observal doctor patch --all-harnesses
+observal scan --inventory --output json
+observal doctor patch --harness claude-code --dry-run --output json
 ```
 
-`scan` is read-only. `doctor patch` installs supported session hooks or extensions and leaves every MCP command and remote URL unchanged.
+`scan --inventory` is the read-only discovery mode; plain scan can perform legacy configuration and tracking migrations. Review the targeted doctor plan before applying it. Capture can include prompts and tool inputs/results: obtain permission and check access/retention policy before sending sessions. `doctor patch` installs supported hooks/extensions without wrapping MCP commands or remote URLs.
 
 Scope hook installation to selected harnesses:
 

@@ -4,7 +4,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictInt
 
 from models.insight_report import InsightReportStatus
 
@@ -14,19 +14,22 @@ class GenerateInsightRequest(BaseModel):
     agent_version: str | None = None
     comparison_agent_version: str | None = None
     version_scope: str | None = "canonical_and_dirty"
+    include_discovery_optimization: bool = False
 
 
 class GenerateComponentInsightRequest(BaseModel):
     period_days: int = 14
     component_version_id: uuid.UUID | None = None
+    include_discovery_optimization: bool = False
 
 
 class ApplySuggestionsRequest(BaseModel):
-    """Select which suggestions to apply. Omit a field or pass None to skip that category."""
+    """Explicit selection: omitted categories are empty; Apply needs a fresh preview digest."""
 
-    config_indices: list[int] | None = None
-    feature_indices: list[int] | None = None
-    pattern_indices: list[int] | None = None
+    config_indices: list[StrictInt] = Field(default_factory=list)
+    feature_indices: list[StrictInt] = Field(default_factory=list)
+    pattern_indices: list[StrictInt] = Field(default_factory=list)
+    preview_digest: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
 
 
 class InsightReportListItem(BaseModel):
@@ -39,6 +42,7 @@ class InsightReportListItem(BaseModel):
     component_version_id: uuid.UUID | None = None
     component_version: str | None = None
     coverage: dict | None = None
+    discovery_optimization_requested: bool = False
     agent_version_id: uuid.UUID | None = None
     agent_version: str | None = None
     version_scope: str | None = None
@@ -78,6 +82,7 @@ class InsightReportResponse(BaseModel):
     period_end: datetime
     metrics: dict | None
     narrative: dict | None
+    discovery_optimization_requested: bool = False
     sessions_analyzed: int
     llm_model_used: str | None
     error_message: str | None

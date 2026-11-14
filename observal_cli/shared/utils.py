@@ -255,16 +255,21 @@ _OBSERVAL_HOOK_MARKERS = (
 )
 
 
-def is_observal_hook_entry(entry: dict) -> bool:
+def is_observal_hook_entry(entry: dict, *, include_generic_marker: bool = True) -> bool:
     """Return True if a single hook handler dict belongs to Observal.
 
+    Set include_generic_marker=False for cleanup that requires an explicit known
+    hook marker rather than a package-name substring. Default matching is unchanged.
     Raises TypeError if *entry* is not a dict.
     """
     if not isinstance(entry, dict):
         raise TypeError(f"is_observal_hook_entry expects dict, got {type(entry).__name__!r}")
     cmd = entry.get("command", "")
     url = entry.get("url", "")
-    return any(m in cmd or m in url for m in _OBSERVAL_HOOK_MARKERS)
+    return any(
+        (include_generic_marker or marker != "observal_cli") and (marker in cmd or marker in url)
+        for marker in _OBSERVAL_HOOK_MARKERS
+    )
 
 
 def is_observal_agent_hook_group(group: object) -> bool:

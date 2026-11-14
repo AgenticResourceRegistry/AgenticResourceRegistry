@@ -4,27 +4,24 @@
 title: "Agent Insights Configuration"
 ---
 
-Configure a LiteLLM-compatible provider so Agentic Resource Registry can generate trace summaries, detect anomalies, and explain agent behavior in natural language.
+Configure the insights report engine's provider, models, and scheduling. Use [insights interpretation](/guides/interpret-insights) for reports, evidence limits, and user-facing outcomes.
 
-## Get Insights running in 5 minutes
+<a id="get-insights-running-in-5-minutes"></a>
 
-1. Get an API key from any provider supported by LiteLLM.
+## Configure report generation
+
+1. Choose a supported provider/model integration and its approved authentication method.
 2. Go to **Settings > Agent Insights** in the Agentic Resource Registry admin panel.
 3. Pick the provider. Agentic Resource Registry loads model options from the LiteLLM catalog.
-4. Paste the key into the **API Key** field.
+4. Configure provider credentials/endpoint as required; local or workload-identity paths are not universally API-key based.
 5. Set the **Sections Model**. Synthesis and Facets fall back to it if left empty.
 6. Save.
 
-**Checkpoint:** Navigate to any trace in the trace viewer. Within 30 seconds, an "Insights" panel should appear with a natural-language summary. If you see "Insights unavailable, no model configured," double-check that the API key and model fields are saved.
+**Checkpoint:** Inspect the saved settings, then request a report for an accessible agent with sufficient delivered evidence. Follow [generate and wait for a report](/cli/ops#agent-insights). Read its returned status, errors, and coverage. A trace page appearing, an API readiness response, or a configured model is not proof that an insight report was generated; no fixed 30-second completion time is promised.
 
 ## Verify it works
 
-```bash
-curl -s http://localhost:8000/readyz
-```
-
-Expected: `{"status":"ok",...}` or `{"status":"degraded",...}` with component statuses. If insights is configured, the response includes `"initialized": true`.
-
+Readiness checks dependencies, not provider credentials or report quality. Verify a bounded generation request and the resulting report independently. Missing evidence, authorization, provider connectivity, model support, or an incomplete run are different failure causes.
 
 ## Field Reference
 
@@ -32,11 +29,11 @@ Expected: `{"status":"ok",...}` or `{"status":"degraded",...}` with component st
 
 The secret key used to authenticate with your selected LiteLLM provider.
 
-**Affects:** All Insights generation (section summaries, synthesis, anomaly detection). Without a valid key, Insights is fully disabled and the "Insights" panel shows "unavailable" on all traces.
+**Affects:** Provider-authenticated report generation. Required authentication depends on the chosen integration; a blank key can be valid for a local endpoint. A key alone does not validate model support, endpoint reachability, delivered evidence, or completed generation.
 
 **Security notes:**
-- The key is stored AES-256 encrypted at rest and never displayed after initial save.
-- Rotate immediately if you see `401 Unauthorized` errors in the Insights worker logs. It likely means the key was revoked upstream.
+- Database-stored sensitive dynamic settings use authenticated Fernet encryption through the server secret-management mechanism. Protect the server secret and recovery material; [file-backed overrides](/self-hosting/configuration#secret-files) have a separate externally managed lifecycle.
+- For `401 Unauthorized`, first verify the endpoint, selected identity/credential, model access, expiry, and provider permissions. Revoke/rotate credentials when compromise, revocation, or expiry requires it—not merely because one request returned 401.
 
 **Values:**
 
@@ -46,14 +43,14 @@ The secret key used to authenticate with your selected LiteLLM provider.
 | `sk-proj-...` | OpenAI-compatible provider key |
 | Bedrock API key | AWS Bedrock via LiteLLM |
 | Any LiteLLM provider key | Use with the matching provider and optional base URL |
-| _(empty)_ | Insights fully disabled; no LLM calls are made |
+| _(empty)_ | No explicit API key is passed to LiteLLM. Local or workload-identity integrations may still authenticate and make calls; key-required providers can fail. |
 
 **When to set:** On initial setup, or when rotating credentials after a key leak or expiry.
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| "Insights unavailable" badge on traces | Key missing or empty | Add a valid API key |
-| `401` in worker logs | Key revoked or expired | Generate and save a new key |
+| Report unavailable or generation failed | Missing model/evidence/access, endpoint failure, or integration-specific authentication failure | Inspect report status/error and provider/model configuration. A blank key alone does not establish the cause. |
+| `401` in worker logs | Incorrect endpoint/identity, expired or revoked credential, or insufficient provider permissions | Verify endpoint, identity, expiry, and access first; renew or rotate the affected credential when indicated. |
 | `429` in worker logs | Rate limit hit | Reduce batch size or upgrade plan |
 
 ### API Base URL

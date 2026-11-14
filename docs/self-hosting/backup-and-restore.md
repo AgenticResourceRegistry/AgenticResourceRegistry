@@ -1,155 +1,126 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Backup and restore"
+title: "Back up and rehearse recovery"
+description: "Create protected backups and validate restoration without deleting the live deployment."
 ---
 
-What to back up, how often, and how to restore. Agentic Resource Registry has three persistent stores with very different loss profiles.
+A backup is useful when you can restore the data, secrets, and software state it depends on. This guide gives a **single-node source Compose** rehearsal path; packaged/cloud deployments must use their actual project, mounts, credentials, and storage procedures.
 
-## What matters, in order
+## What to preserve
 
-| Priority | Volume | Contents | Loss impact |
-| --- | --- | --- | --- |
-| **Critical** | `apidata` | JWT signing keys | Every session invalidated. No recovery without the keys. |
-| **Critical** | `pgdata` | Users, RBAC, registry metadata, agents | All accounts and registry lost. |
-| **Important** | `chdata` | Session events, aggregates, audit, and security events | All telemetry lost. Accounts and registry survive. |
-| **Low** | `grafanadata` | Custom Grafana dashboards | Custom dashboards lost; provisioned defaults come back automatically. |
-| **Low** | `redisdata` | Job queue state | In-flight jobs lost; they re-queue on next worker restart. |
-
-**Always back up `apidata` and `pgdata` together.** Backing up one without the other leaves you in a broken state after restore.
-
-## Backup cadence
-
-| Cadence | What | Retention |
+| Store/material | What it protects | Recovery concern |
 | --- | --- | --- |
-| Daily | `pgdata`, `apidata` | 30 days |
-| Weekly | `chdata` | 12 weeks |
-| Before every upgrade | All three | Keep until the upgrade is confirmed stable |
+| PostgreSQL | Users, resources, versions, reviews, settings, and relational state | Preserve the database plus the secret needed to decrypt stored sensitive values. |
+| Application data (`apidata`) | JWT key material and other persistent application artifacts | Restoring PostgreSQL alone does not restore signing keys or every artifact. |
+| Configuration and mounted secrets | `SECRET_KEY`, database credentials, provider/SP secrets, mount/project metadata | New random secrets can make restored encrypted values unusable. |
+| ClickHouse (`chdata`) | Sessions, aggregates, installation/evidence snapshots, audit and security records | A schema export is **not** a backup of these records. |
+| Redis (`redisdata`) | Queue/persistence and authentication/runtime coordination state | Do not assume lost jobs or revocation state automatically reappears on worker restart. |
+| Optional Grafana data/configuration | Operator-created dashboards and provisioned definitions | Preserve custom content according to your deployment. |
 
-## Postgres backup
+Define recovery point/time objectives for each store. ClickHouse audit/evidence may be critical for your organization; do not universally rank it as dispensable. Use protected off-host copies and a tested recovery cadence.
 
-Use `pg_dump` inside the running container:
+<Warning>
+  **This recipe is not a complete recovery set by itself:** it archives PostgreSQL, application material, and ClickHouse, but does not back up or restore Redis. Require a separate validated Redis persistence backup/restore and queue-reconciliation procedure, recorded with the recovery set, before calling recovery complete. A `redisdata` volume alone does not prove recent in-memory jobs or revocations were persisted. Keep restored API/workers isolated until authentication revocations—including changes after the backup—are reconciled or old credentials are invalidated.
+</Warning>
 
-```bash
-docker compose -f docker/docker-compose.yml exec -T observal-db \
-  pg_dump -U postgres observal | gzip > observal-pg-$(date +%Y%m%d).sql.gz
-```
+## Before creating a backup
 
-Restore into a fresh DB:
+Record the software revision, schema migration state, Compose project/files/profiles, volume names, and mounted secret locations. Pick a maintenance window or a validated snapshot procedure that keeps the relevant stores consistent.
 
-```bash
-docker compose -f docker/docker-compose.yml down -v
-docker compose -f docker/docker-compose.yml up -d observal-db
-
-zcat observal-pg-20260421.sql.gz | \
-  docker compose -f docker/docker-compose.yml exec -T observal-db \
-  psql -U postgres observal
-
-docker compose -f docker/docker-compose.yml up -d
-```
-
-## JWT key backup (`apidata` volume)
-
-The API container mounts the `apidata` volume at `/data` and stores keys at `/data/keys`. Tar it out:
+The commands below run from the source checkout, use Bash, and assume the example database/user `observal`/`postgres`. Replace those if your deployment differs. Keep overlays/profile flags consistent. Store backups outside the checkout:
 
 ```bash
-docker compose -f docker/docker-compose.yml exec -T observal-api \
-  tar czf - -C /data keys > observal-keys-$(date +%Y%m%d).tar.gz
+umask 077
+BACKUP_DIR="$HOME/registry-backups/$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$BACKUP_DIR"
+# Add -p YOUR_PROJECT and any overlay/profile flags to this function if used.
+dc() { docker compose -f docker/docker-compose.yml "$@"; }
 ```
 
-Restore:
+Do not paste a guessed Docker volume prefix. Resolve the actual app and ClickHouse mounts **before** stopping services:
 
 ```bash
-# With the API stopped
-docker compose -f docker/docker-compose.yml stop observal-api
-
-docker run --rm \
-  -v observal_apidata:/data \
-  -v "$(pwd)":/backup \
-  alpine sh -c "cd /data && tar xzf /backup/observal-keys-20260421.tar.gz"
-
-docker compose -f docker/docker-compose.yml start observal-api
+API_CONTAINER="$(dc ps -q observal-api)"
+CH_CONTAINER="$(dc ps -q observal-clickhouse)"
+APP_VOLUME="$(docker inspect "$API_CONTAINER" --format '{{range .Mounts}}{{if and (eq .Type "volume") (eq .Destination "/data")}}{{.Name}}{{end}}{{end}}')"
+CH_VOLUME="$(docker inspect "$CH_CONTAINER" --format '{{range .Mounts}}{{if and (eq .Type "volume") (eq .Destination "/var/lib/clickhouse")}}{{.Name}}{{end}}{{end}}')"
+test -n "$APP_VOLUME" && test -n "$CH_VOLUME"
 ```
 
-## ClickHouse backup
+This example assumes one relevant API and ClickHouse container. For replicas or external databases, use the corresponding consistent backup procedure instead of treating multiple container IDs as one path.
 
-### Option A - volume snapshot (simplest)
+## Back up the relational and application state
+
+Drain/stop all API and worker writers. This is an intentional interruption; the database remains running for a logical dump:
 
 ```bash
-docker compose -f docker/docker-compose.yml stop observal-clickhouse
-docker run --rm -v observal_chdata:/data -v "$(pwd)":/backup \
-  alpine tar czf /backup/observal-ch-$(date +%Y%m%d).tar.gz -C /data .
-docker compose -f docker/docker-compose.yml start observal-clickhouse
+dc stop observal-api observal-worker
+dc exec -T observal-db pg_dump -U postgres -Fc -d observal > "$BACKUP_DIR/postgres.dump"
+test -s "$BACKUP_DIR/postgres.dump"
 ```
 
-Downtime: however long the tar takes (a minute to tens of minutes depending on size).
-
-### Option B - ClickHouse native `BACKUP` (no downtime)
+Use an approved helper image to archive the identified application volume without writing to it. `alpine:3` is an evaluation example; pin an approved image/digest for your operational procedure:
 
 ```bash
-docker compose -f docker/docker-compose.yml exec observal-clickhouse \
-  clickhouse-client --query "BACKUP DATABASE observal TO Disk('backups', 'observal-$(date +%Y%m%d).zip')"
+HELPER_IMAGE='alpine:3'
+docker run --rm --mount "type=volume,source=$APP_VOLUME,target=/data,readonly" \
+  "$HELPER_IMAGE" tar czf - -C /data . > "$BACKUP_DIR/apidata.tar.gz"
+test -s "$BACKUP_DIR/apidata.tar.gz"
 ```
 
-Requires configuring a backup disk in ClickHouse config; see [ClickHouse docs](https://clickhouse.com/docs/en/operations/backup).
+Securely preserve the matching configuration and externally mounted secrets separately; the app volume does not contain every host credential. Do not print those files or commit them. Record checksums and protect the backup's provenance, confidentiality, and integrity.
 
-Restore:
+## Back up ClickHouse evidence
+
+For a cold volume archive, keep writers stopped, stop ClickHouse, and archive its identified volume read-only:
 
 ```bash
-docker compose -f docker/docker-compose.yml exec observal-clickhouse \
-  clickhouse-client --query "RESTORE DATABASE observal FROM Disk('backups', 'observal-20260421.zip')"
+dc stop observal-clickhouse
+docker run --rm --mount "type=volume,source=$CH_VOLUME,target=/data,readonly" \
+  "$HELPER_IMAGE" tar czf - -C /data . > "$BACKUP_DIR/clickhouse.tar.gz"
+test -s "$BACKUP_DIR/clickhouse.tar.gz"
 ```
 
-## Restore order
+A native ClickHouse backup is an alternative only after its destination, authentication, restore procedure, and storage policy are configured and verified. A generic `BACKUP ... Disk('backups', ...)` command does not establish that the stock deployment has such a disk. See [ClickHouse backup documentation](https://clickhouse.com/docs/en/operations/backup).
 
-If you're restoring from backup after a catastrophic failure:
+Inspect command exit codes and archive contents. A non-empty file alone is not proof of a complete backup. If any step fails, preserve the error and resolve the service state deliberately; do not continue a cron chain as if a backup succeeded.
 
-1. Stop the whole stack: `docker compose down`.
-2. Restore `apidata` (JWT keys) first.
-3. Restore `pgdata` (Postgres).
-4. Restore `chdata` (ClickHouse).
-5. Bring up the stack: `docker compose up -d`.
-6. Smoke test: `observal auth login`, `observal auth status`.
+Resume the original services only after the covered backups and required separate Redis procedure succeed, with confirmed data-store health. Verify health through the actual load balancer and reconcile pending work. Restart the load balancer if API/web containers were recreated.
 
-Skipping step 2 works but every user has to re-login.
+## Rehearse restoration in isolation
 
-## Verifying a backup
+<Warning>
+  Do **not** run `down --volumes` against the live deployment as a restore step. Create separate rehearsal storage and inspect its actual mounts. Never let a test restore write into the production volumes or send cloned credentials to production integrations.
+</Warning>
 
-Test restores in a staging environment at least quarterly. Untested backups are guesses.
+1. Prepare a separate project and fresh destination stores matching the backed-up software/schema requirements.
+2. Restore the intended configuration and encryption material securely, with outbound production integrations blocked. Keep API/workers stopped while data is restored.
+3. Restore PostgreSQL into the explicitly identified fresh destination database. For a logical dump, use `pg_restore --exit-on-error` and check the result; do not treat every non-zero restore status as harmless.
+4. Restore trusted application-data and ClickHouse archives into their separate destination volumes while the relevant services are stopped. Verify archive paths/provenance and ownership before extraction. A bind mount or empty replacement volume is not the recovered data.
+5. Validate schema state before running init. An existing, unversioned, or partially initialized schema must not simply be stamped as current. Apply only the reviewed upgrade path needed for the target version.
+6. Restore Redis using the separately validated procedure and reconcile persistence/checkpoints and queued work before workers can consume it. Do not silently replace it with an empty store.
+7. **Authentication cutover gate:** restoring old signing keys with empty/older Redis can accept a revoked, unexpired access token because its revocation marker is missing. Redis fail-closed behavior protects against connection failure, not absent markers. Reconcile revocations after the backup from an authoritative source, or use an approved procedure to invalidate old access tokens and restored refresh/session credentials; key restoration or key rotation alone is not proof that all old credentials are rejected. Keep API access restricted until representative revoked-token rejection and intended login/recovery are verified.
+8. Start compatible data stores and the API on the isolated validation network, check the health response body, and test ordinary-user permissions before authorizing external access, workers, or outbound integrations.
 
-Smoke test after restore:
+For a **fresh disposable destination database only**, the logical restore pattern is:
 
 ```bash
-observal auth login
-observal auth whoami              # you should be your pre-backup user
-observal agent list               # registry should be intact
-observal ops traces --limit 5     # traces up to the backup timestamp should be visible
+# DEST_PROJECT and DEST_DB must identify the isolated rehearsal, not production.
+docker compose -p DEST_PROJECT -f docker/docker-compose.yml exec -T observal-db \
+  pg_restore --exit-on-error --no-owner --no-privileges -U postgres -d DEST_DB \
+  < "$BACKUP_DIR/postgres.dump"
 ```
 
-## Automated backup
+The destination database must already exist, and the no-owner/no-privileges choice must match the rehearsal's role model. Production recovery may need original roles/grants preserved through its own planned procedure.
 
-A minimal cron setup (on the Docker host):
+## Verify recovery
 
-```cron
-# Daily at 03:00 - Postgres + JWT keys
-0 3 * * * cd /opt/AgenticResourceRegistry && \
-  docker compose -f docker/docker-compose.yml exec -T observal-db \
-  pg_dump -U postgres observal | gzip > /backups/pg-$(date +\%Y\%m\%d).sql.gz
+Compare expected account/resource/version/review counts and representative records, key identity, encrypted-setting readability, and required ClickHouse evidence. Verify restored permissions as an ordinary user. If preserving token continuity is a recovery objective, test it rather than inferring it from a restored key filename; Redis and revocation/expiry state also matter.
 
-0 3 * * * cd /opt/AgenticResourceRegistry && \
-  docker compose -f docker/docker-compose.yml exec -T observal-api \
-  tar czf - -C /data keys > /backups/keys-$(date +\%Y\%m\%d).tar.gz
-
-# Weekly Sunday at 04:00 - ClickHouse
-0 4 * * 0 cd /opt/AgenticResourceRegistry && \
-  docker compose -f docker/docker-compose.yml stop observal-clickhouse && \
-  docker run --rm -v observal_chdata:/data -v /backups:/backup alpine \
-    tar czf /backup/ch-$(date +\%Y\%m\%d).tar.gz -C /data . && \
-  docker compose -f docker/docker-compose.yml start observal-clickhouse
-```
-
-Ship the `/backups` directory offsite (S3, B2, rsync to another host).
+Back up before every migration/upgrade, keep the previous recovery set until acceptance, and rehearse representative historical recovery periodically. The CLI-managed upgrade helper's PostgreSQL backup and optional ClickHouse **schema** export do not replace this full recovery plan.
 
 ## Next
 
-→ [Troubleshooting](/self-hosting/troubleshooting)
+[Plan an upgrade](/self-hosting/upgrades), [check storage/network bindings](/self-hosting/ports-and-volumes), and keep a recovery checklist with measured results instead of an untested deletion/reset recipe.

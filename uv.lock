@@ -505,7 +505,7 @@ wheels = [
 
 [[package]]
 name = "observal-cli"
-version = "1.17.0.dev0"
+version = "1.18.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "asyncpg" },
@@ -559,7 +559,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "questionary", specifier = ">=2.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
-    { name = "typer", specifier = ">=0.12.0" },
+    { name = "typer", specifier = ">=0.12.0,<0.29" },
 ]
 provides-extras = ["migrate"]
 

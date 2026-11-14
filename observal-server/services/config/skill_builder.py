@@ -20,8 +20,9 @@ def _yaml_frontmatter(data: dict[str, str | bool]) -> str:
 def generate_skill(skill: dict, harness: str, scope: str = "project") -> dict | None:
     """Generate an harness-specific skill file entry.
 
-    Returns a dict with 'path' and 'content' keys, or None for
-    monolithic harnesses (Gemini, Codex, Copilot) that inline skills into rules.
+    Returns a dict with 'path' and 'content' keys, or None when the registry
+    has no skill paths for the requested harness. Install callers enforce
+    capability support separately.
 
     This is the canonical implementation used by both code paths.
     """

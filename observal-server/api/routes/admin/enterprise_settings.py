@@ -263,10 +263,10 @@ async def upsert_setting(
             raise HTTPException(
                 status_code=422, detail="Usage reporting frequency must be every_6_hours, daily, or weekly"
             )
-    elif key == "usage_ping.enabled":
+    elif key in ("usage_ping.enabled", "usage_ping.include_admin_emails"):
         value = value.lower()
         if value not in {"true", "false"}:
-            raise HTTPException(status_code=422, detail="Usage reporting must be true or false")
+            raise HTTPException(status_code=422, detail="Usage reporting settings must be true or false")
 
     sensitive = key in ds.SENSITIVE_KEYS
     store_value = ds.encrypt_value(value) if sensitive else value

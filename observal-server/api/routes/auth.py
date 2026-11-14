@@ -69,6 +69,7 @@ from services.token_revocation import (
     token_issued_us,
     upgrade_legacy_revocation,
 )
+from services.usage_ping import record_access_host
 from services.username_generator import generate_unique_username
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -1766,6 +1767,8 @@ async def refresh_token(request: Request, req: RefreshRequest, db: AsyncSession 
         raise HTTPException(status_code=503, detail="Auth service temporarily unavailable")
     if revoked_meanwhile:
         raise HTTPException(status_code=401, detail="Refresh token has been revoked or expired")
+    # Usage reporting counts the domains signed-in users reach the server on.
+    await record_access_host(request)
     return TokenResponse(
         access_token=access_token,
         refresh_token=new_refresh_token,

@@ -27,6 +27,7 @@ import structlog
 
 from ._deps import get_call_model
 from .registry_match import catalog_block
+from .section_validation import section_valid
 
 if TYPE_CHECKING:
     from .registry_match import CatalogOffer
@@ -200,9 +201,10 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
     "config_additions": [
       {{
         "action_type": "modify_prompt",
+        "requires_feature_indices": [],
         "addition": "exact text to add to the agent's system prompt or AGENTS.md",
         "why": "1 sentence explaining why based on actual sessions",
-        "where": "system_prompt | AGENTS.md | agent_config",
+        "where": "system_prompt | AGENTS.md",
         "confidence": "high | medium | low | insufficient_data",
         "risk": "low | medium | high"
       }}
@@ -218,7 +220,8 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
         "why_for_you": "why this would help YOU based on your sessions",
         "confidence": "high | medium | low | insufficient_data",
         "risk": "low | medium | high",
-        "example": "required only for create_new_skill/create_new_hook; see format rules below"
+        "example": "required only for create_new_skill/create_new_hook; see format rules below",
+        "requirements": ["jq"]
       }}
     ],
     "usage_patterns": [
@@ -233,6 +236,9 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
 }}
 
 Rules:
+- Structured agent_config changes are unsupported; propose only system_prompt or AGENTS.md text additions.
+- Every config addition MUST include requires_feature_indices: a list of zero-based features_to_try indices it needs, or [] for an independent change. Do not guess dependencies from names.
+- Every create_new_hook MUST include requirements: the executables its script calls besides bash (for example "jq"), or [] when it uses only Bash builtins.
 - config_additions: PRIORITIZE instructions from USER INSTRUCTIONS and REPEATED INSTRUCTIONS sections. These are things the user has ALREADY told the agent but it keeps forgetting. Maximum 7.
 - features_to_try: 2-3 concrete suggestions.
 - usage_patterns: 2-4 suggestions for how to prompt differently. Each must include a copyable prompt the user can try immediately.
@@ -541,20 +547,27 @@ _SECTION_MAX_TOKENS: dict[str, int] = {
 
 
 async def _call_section(section_name: str, prompt: str, model: str | None = None) -> tuple[str, dict]:
-    """Call the LLM for a single section, return (name, result)."""
+    """Try twice, preserving a safe failure record rather than fabricating an empty section."""
     call_model = get_call_model()
-    max_tokens = _SECTION_MAX_TOKENS.get(section_name, 16384)
-    try:
-        result = await call_model(prompt, model_override=model, max_tokens=max_tokens)
-        if result and isinstance(result, dict):
-            return section_name, result
-        logger.warning("section_empty_response", section=section_name)
-        return section_name, {}
-    except RuntimeError:
-        raise
-    except Exception as e:
-        logger.error("section_call_failed", section=section_name, error=str(e))
-        return section_name, {}
+    max_tokens = _SECTION_MAX_TOKENS.get(section_name, 4096 if section_name == "at_a_glance" else 16384)
+    code = "invalid_or_empty_response"
+    for attempt in range(2):
+        try:
+            result = await call_model(prompt, model_override=model, max_tokens=max_tokens)
+            if section_valid(section_name, result):
+                return section_name, {section_name: result[section_name]}
+            code = "invalid_or_empty_response"
+        except Exception:
+            # Model errors may contain credentials or untrusted response text.
+            code = "model_call_failed"
+        if attempt == 0:
+            prompt += (
+                "\nThe last reply was unavailable or did not match the requested schema. "
+                f"Return ONLY a JSON object with the exact '{section_name}' envelope and all required fields. "
+                "Use empty lists when there are genuinely no findings; do not omit required fields."
+            )
+    logger.warning("section_generation_failed", section=section_name, code=code)
+    return section_name, {"_section_error": {"section": section_name, "code": code, "attempts": 2}}
 
 
 def generate_component_sections(summary: dict, coverage: dict) -> dict:
@@ -615,8 +628,6 @@ async def generate_sections(
     Returns:
         Dict with structured section outputs for each narrative section.
     """
-    call_model = get_call_model()
-
     # Build previous data block for regression section
     previous_data_block = ""
     if previous_report:
@@ -662,32 +673,26 @@ async def generate_sections(
     ]
     results = await asyncio.gather(*tasks)
 
-    # Collect results
+    # Failed sections remain visibly unavailable, not equivalent to "no findings".
     narrative: dict = {}
+    errors: list[dict] = []
     for name, result in results:
-        if name in result:
-            narrative[name] = result[name]
-        elif result:
-            first_value = next(iter(result.values()), None)
-            narrative[name] = first_value
+        if "_section_error" in result:
+            errors.append(result["_section_error"])
+            narrative[name] = {}
         else:
-            narrative[name] = {} if name != "fun_ending" else {"headline": "", "detail": ""}
+            narrative[name] = result[name]
 
-    # Run synthesis with all section outputs
     synthesis_prompt = SYNTHESIS_PROMPT.format(
         data_block=data_block,
         sections_json=json.dumps(narrative, indent=2, default=str),
     )
-    try:
-        synthesis_result = await call_model(synthesis_prompt, model_override=fast_model, max_tokens=4096)
-        if synthesis_result and "at_a_glance" in synthesis_result:
-            narrative["at_a_glance"] = synthesis_result["at_a_glance"]
-        elif synthesis_result:
-            narrative["at_a_glance"] = next(iter(synthesis_result.values()), {})
-        else:
-            narrative["at_a_glance"] = {}
-    except Exception as e:
-        logger.error("synthesis_failed", error=str(e))
+    _, synthesis_result = await _call_section("at_a_glance", synthesis_prompt, model=fast_model)
+    if "_section_error" in synthesis_result:
+        errors.append(synthesis_result["_section_error"])
         narrative["at_a_glance"] = {}
-
+    else:
+        narrative["at_a_glance"] = synthesis_result["at_a_glance"]
+    narrative["section_errors"] = errors
+    narrative["generation_state"] = "partial" if errors else "complete"
     return narrative

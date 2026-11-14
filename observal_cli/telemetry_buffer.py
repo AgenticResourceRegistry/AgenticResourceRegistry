@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Durable SQLite outbox for acknowledged session delivery.
@@ -48,6 +49,7 @@ class OutboxItem:
     final: bool
     payload: dict
     attempts: int
+    delivery_context: dict | None = None
 
 
 def _path(db_path: Path | None) -> Path:
@@ -55,6 +57,7 @@ def _path(db_path: Path | None) -> Path:
 
 
 def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> sqlite3.Connection:
+    """Open and migrate the local durable outbox without changing API payload fields."""
     path = _path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -95,6 +98,11 @@ def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> 
             )
             """
         )
+        # Recheck under a write transaction: concurrent first opens must not race ALTER.
+        if "delivery_context" not in {row[1] for row in conn.execute("PRAGMA table_info(session_outbox)")}:
+            conn.execute("BEGIN IMMEDIATE")
+            if "delivery_context" not in {row[1] for row in conn.execute("PRAGMA table_info(session_outbox)")}:
+                conn.execute("ALTER TABLE session_outbox ADD COLUMN delivery_context TEXT")
         conn.commit()
         page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
         conn.execute(f"PRAGMA max_page_count = {max(1, max_bytes // page_size)}")
@@ -127,6 +135,7 @@ def enqueue(
     checkpoint_key: str | None = None,
     db_path: Path | None = None,
     max_bytes: int = MAX_OUTBOX_BYTES,
+    delivery_context: dict | None = None,
 ) -> int:
     """Persist one source batch and return its durable row ID.
 
@@ -135,7 +144,12 @@ def enqueue(
     """
     lines = payload.get("lines") or []
     metadata_only = not lines
-    if metadata_only and payload.get("total_credits") is None and not payload.get("final"):
+    if (
+        metadata_only
+        and payload.get("total_credits") is None
+        and not payload.get("session_model")
+        and not payload.get("final")
+    ):
         raise ValueError("empty session outbox payload must contain durable metadata")
     harness = str(payload.get("harness") or "")
     session_id = str(payload.get("session_id") or "")
@@ -171,15 +185,32 @@ def enqueue(
                 """
                 INSERT INTO session_outbox (
                     destination, user_id, harness, session_id, checkpoint_key,
-                    start_line, end_line, end_offset, final, payload, records_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    start_line, end_line, end_offset, final, payload, records_hash, delivery_context
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(destination, user_id, harness, session_id, start_line, end_line)
                 DO UPDATE SET
                     checkpoint_key = excluded.checkpoint_key,
                     end_offset = max(session_outbox.end_offset, excluded.end_offset),
                     final = max(session_outbox.final, excluded.final),
+                    delivery_context = CASE
+                        WHEN excluded.final = 1
+                            OR (session_outbox.final = 0 AND excluded.end_line < excluded.start_line)
+                        THEN excluded.delivery_context
+                        ELSE session_outbox.delivery_context
+                    END,
                     payload = CASE
-                        WHEN excluded.final = 1 OR excluded.end_line < excluded.start_line THEN excluded.payload
+                        WHEN excluded.final = 1
+                            OR (session_outbox.final = 0 AND excluded.end_line < excluded.start_line)
+                        THEN
+                            CASE WHEN json_extract(excluded.payload, '$.session_model') IS NULL
+                                      AND json_extract(session_outbox.payload, '$.session_model') IS NOT NULL
+                                 THEN json_set(excluded.payload, '$.session_model',
+                                               json_extract(session_outbox.payload, '$.session_model'))
+                                 ELSE excluded.payload END
+                        WHEN session_outbox.final = 1
+                            AND json_extract(excluded.payload, '$.total_credits') IS NOT NULL
+                        THEN json_set(session_outbox.payload, '$.total_credits',
+                            json_extract(excluded.payload, '$.total_credits'))
                         ELSE session_outbox.payload
                     END
                 """,
@@ -192,6 +223,7 @@ def enqueue(
                     int(final),
                     serialized,
                     records_hash,
+                    json.dumps(delivery_context) if delivery_context is not None else None,
                 ),
             )
             conn.commit()
@@ -234,30 +266,48 @@ def pending(
             "WHERE destination = ? AND user_id = ? GROUP BY harness, session_id) "
             "SELECT item.id, item.destination, item.user_id, item.harness, item.session_id, "
             "item.checkpoint_key, item.start_line, item.end_line, item.end_offset, item.final, "
-            "item.payload, item.attempts "
+            "item.payload, item.attempts, item.delivery_context "
             "FROM session_outbox AS item JOIN firsts "
             "ON firsts.harness = item.harness AND firsts.session_id = item.session_id "
             "WHERE item.destination = ? AND item.user_id = ? "
             "ORDER BY (item.end_line < item.start_line), firsts.first_id, item.start_line, item.id LIMIT ?",
             (destination.rstrip("/"), user_id, destination.rstrip("/"), user_id, limit),
         ).fetchall()
-        return [
-            OutboxItem(
-                id=int(row[0]),
-                destination=row[1],
-                user_id=row[2],
-                harness=row[3],
-                session_id=row[4],
-                checkpoint_key=row[5],
-                start_line=int(row[6]),
-                end_line=int(row[7]),
-                end_offset=int(row[8]),
-                final=bool(row[9]),
-                payload=json.loads(row[10]),
-                attempts=int(row[11]),
-            )
-            for row in rows
-        ]
+        return [_outbox_item(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _outbox_item(row) -> OutboxItem:
+    """Decode one SQLite row without changing its local authority envelope."""
+    return OutboxItem(
+        id=int(row[0]),
+        destination=row[1],
+        user_id=row[2],
+        harness=row[3],
+        session_id=row[4],
+        checkpoint_key=row[5],
+        start_line=int(row[6]),
+        end_line=int(row[7]),
+        end_offset=int(row[8]),
+        final=bool(row[9]),
+        payload=json.loads(row[10]),
+        attempts=int(row[11]),
+        delivery_context=json.loads(row[12]) if row[12] is not None else None,
+    )
+
+
+def get_item(item_id: int, *, db_path: Path | None = None) -> OutboxItem | None:
+    """Refresh a candidate after obtaining its transport claim; an accepted row is absent."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT id, destination, user_id, harness, session_id, checkpoint_key, "
+            "start_line, end_line, end_offset, final, payload, attempts, delivery_context "
+            "FROM session_outbox WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        return _outbox_item(row) if row is not None else None
     finally:
         conn.close()
 
@@ -422,3 +472,22 @@ def stats(*, db_path: Path | None = None) -> dict:
         }
     finally:
         conn.close()
+
+
+def supersede_final(item: OutboxItem, *, db_path: Path | None = None) -> OutboxItem:
+    """Durably remove final semantics without changing queued source records or credits."""
+    from dataclasses import replace
+
+    payload = dict(item.payload)
+    for key in ("final", "total_line_count", "total_offset", "session_hash", "hashed_line_count"):
+        payload.pop(key, None)
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE session_outbox SET final = 0, payload = ? WHERE id = ?",
+            (json.dumps(payload, separators=(",", ":"), ensure_ascii=False), item.id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return replace(item, final=False, payload=payload)

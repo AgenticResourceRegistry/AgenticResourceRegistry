@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Environment variables"
 ---
@@ -20,12 +21,18 @@ Every credential listed with file support accepts `NAME_FILE=/path/to/secret` in
 | ------------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SECRET_KEY`             | `change-me-to-a-random-string` | Application encryption secret. Supports `SECRET_KEY_FILE`. Generate a random value of at least 32 characters. |
 | `OLD_SECRET_KEY`         | unset                          | Previous secret during encrypted-setting rotation. Supports `OLD_SECRET_KEY_FILE`. |
-| `FRONTEND_URL`           | `http://localhost:3000`        | External frontend URL (OAuth redirects, email links)                                                                                                          |
+| `FRONTEND_URL` | package-template input | Do not assume this sets API callbacks; configure and verify runtime `deployment.frontend_url`. |
 | `CORS_ALLOWED_ORIGINS`   | `http://localhost:3000`        | Comma-separated allowed CORS origins                                                                                                                          |
 | `MAX_REQUEST_SIZE_MB`    | `10`                           | Maximum request body size for ordinary endpoints                                                                                                              |
 | `MAX_MIGRATION_REQUEST_SIZE_MB` | `6144`                | Maximum combined multipart request size for Admin migration import and validation uploads                                                                     |
-| `RATE_LIMIT_AUTH`        | `10/minute`                    | General auth-endpoint rate limit                                                                                                                              |
-| `RATE_LIMIT_AUTH_STRICT` | `5/minute`                     | User registration rate limit                                                                                                                                  |
+
+
+
+### Runtime settings are not general environment inputs
+
+Configure `security.rate_limit_auth`, `security.rate_limit_auth_strict`, and `data.retention_days` through runtime settings, not the obsolete `RATE_LIMIT_AUTH` or `DATA_RETENTION_DAYS` examples. Registration is independently controlled by `auth.self_registration_enabled`. Startup-bound clients/middleware still need the appropriate restart and verification.
+
+`deployment.frontend_url` is used for authentication callbacks. The inspected CORS builder reads process `CORS_ALLOWED_ORIGINS`, not `deployment.cors_origins`; a similarly named admin setting is not proof of live middleware behavior. See [configuration mechanisms](/self-hosting/configuration).
 
 ### Databases
 
@@ -41,7 +48,7 @@ Every credential listed with file support accepts `NAME_FILE=/path/to/secret` in
 | `CLICKHOUSE_USER`     | `default`                                                        | ClickHouse user |
 | `CLICKHOUSE_PASSWORD` | container-specific                                              | Direct ClickHouse password for existing installs |
 | `REDIS_URL`           | `redis://localhost:6379`                                         | Redis connection string. Supports `REDIS_URL_FILE`. |
-| `DATA_RETENTION_DAYS` | `90`                                                             | ClickHouse TTL in days. `0` disables. Minimum non-zero: `7` |
+
 
 ### SSO
 
@@ -61,12 +68,12 @@ File-backed forms such as `OAUTH_CLIENT_SECRET_FILE`, `GOOGLE_OAUTH_CLIENT_SECRE
 
 > **Note:** Bedrock now supports [API keys](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html) — generate one from the AWS console and use it like any other provider. See [Insights LLM Setup](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/insights-setup.md).
 
-These environment variables are **not required** if you use Bedrock API keys (recommended). They exist only for legacy setups using instance roles or ECS task roles where LiteLLM auto-discovers credentials from the environment.
+Provider authentication depends on the Bedrock integration you choose. API-key and IAM workload-identity paths are distinct; do not treat instance/ECS roles as obsolete. Follow the provider's credential setup and avoid copying long-lived credentials into application source.
 
 | Variable                | Default     | Description                                 |
 | ----------------------- | ----------- | ------------------------------------------- |
-| `AWS_ACCESS_KEY_ID`     | -           | Only for legacy IAM auth (not recommended)  |
-| `AWS_SECRET_ACCESS_KEY` | -           | Only for legacy IAM auth (not recommended)  |
+| `AWS_ACCESS_KEY_ID`     | -           | For explicit IAM credentials when needed  |
+| `AWS_SECRET_ACCESS_KEY` | -           | For explicit IAM credentials when needed  |
 | `AWS_SESSION_TOKEN`     | -           | Temporary credentials (STS AssumeRole)      |
 | `AWS_REGION_NAME`       | `us-east-1` | AWS region (used by LiteLLM's boto3 client) |
 
@@ -81,7 +88,7 @@ These environment variables are **not required** if you use Bedrock API keys (re
 | `GIT_CLONE_TIMEOUT`    | `120`            | Clone timeout, seconds                                                          |
 | `WEBHOOK_PUBLIC_URL`   | -                | Public base URL GitHub and GitLab use for webhook deliveries when the rest of Agentic Resource Registry is private. Shown as the webhook URL in the MCP **Sync** tab. Unset means the deployment's normal public URL. See [Sync an MCP server from GitHub or GitLab](/use-cases/mcp-repo-sync#private-deployments) |
 
-### Demo accounts (seeded on first startup if no users exist)
+### Demo accounts (seeded when no real users exist)
 
 | Variable                    | Default                 |
 | --------------------------- | ----------------------- |
@@ -94,7 +101,7 @@ These environment variables are **not required** if you use Bedrock API keys (re
 | `DEMO_USER_EMAIL`           | `user@demo.example`     |
 | `DEMO_USER_PASSWORD`        | `user-changeme` in source Compose; generated file in server package |
 
-Each demo password supports its corresponding `_FILE` form. Remove demo variables and files before a real deployment.
+Each demo password supports its corresponding `_FILE` form. Source Compose supplies API defaults even when `.env` entries are removed; explicitly clear those service inputs before a fresh non-demo boot. The inspected seeding path does not consult `SEED_DEMO_ACCOUNTS`. Clearing inputs does not delete existing accounts. See [demo-account configuration](/self-hosting/configuration#demo-accounts).
 
 ### Docker host ports
 
@@ -104,7 +111,8 @@ Used only by Docker Compose. Prometheus and Grafana ports apply only when `docke
 | ---------------------- | ------- | ------------------------- |
 | `OBSERVAL_BIND_ADDRESS` | `127.0.0.1` in the server package | Host address for published ports. A non-loopback value is explicit remote exposure. |
 | `OBSERVAL_SECRET_GID` | operator group from `setup.sh` | Supplementary container group allowed to read server-package files with mode `0640`. |
-| `API_HOST_PORT`        | `8000`  | API (internal, behind LB) |
+| `API_HOST_PORT` | `8000` in the package | Published package load-balancer endpoint for UI/API; not the source API container port. |
+| `LB_HOST_PORT` | `80` in source Compose | Published source load-balancer endpoint; source API port 8000 remains internal. |
 | `WEB_HOST_PORT`        | `3000`  | Web UI                    |
 | `POSTGRES_HOST_PORT`   | `5432`  | Postgres                  |
 | `CLICKHOUSE_HOST_PORT` | `8123`  | ClickHouse                |
@@ -131,7 +139,7 @@ Read from the environment at invocation time. Override values in `~/.observal/co
 | ----------------------- | ------------------------------ | ----------------------------------------------------------- |
 | `OBSERVAL_SERVER_URL`   | from `~/.observal/config.json` | Server URL                                                  |
 | `OBSERVAL_ACCESS_TOKEN` | from `~/.observal/config.json` | Access token (preferred for CI)                             |
-| `OBSERVAL_API_KEY`      | from `~/.observal/config.json` | API key alias for `OBSERVAL_ACCESS_TOKEN` |
+| `OBSERVAL_API_KEY` | legacy token input | Historical alias for a JWT access token; not API-key authentication. Prefer `OBSERVAL_ACCESS_TOKEN` or its file form. |
 | `OBSERVAL_TOKEN`        | from `~/.observal/config.json` | CI token alias with highest legacy precedence |
 | `OBSERVAL_PASSWORD`     | unset                          | Password for credential or bootstrap login |
 | `OBSERVAL_CURRENT_PASSWORD` | unset                      | Current password for non-interactive password changes |
@@ -140,13 +148,14 @@ Read from the environment at invocation time. Override values in `~/.observal/co
 
 The token and password variables support corresponding `_FILE` forms. Configuring both a direct variable and its file form is an error. When multiple token aliases are present, the legacy precedence remains `OBSERVAL_TOKEN`, then `OBSERVAL_API_KEY`, then `OBSERVAL_ACCESS_TOKEN`.
 
-Example CI usage:
+Example CI usage (dedicated account and isolated configuration; do not reuse a developer's unrelated refresh credentials):
 
 ```bash
-export OBSERVAL_SERVER_URL=https://observal.your-company.internal
-export OBSERVAL_API_KEY='replace-with-your-key'
+export OBSERVAL_SERVER_URL=https://registry.example.com
+# Mount the authorized account's JWT access token through your CI secret mechanism.
+export OBSERVAL_ACCESS_TOKEN_FILE=/run/secrets/observal_access_token
 
-observal ops traces --limit 100 --output json | jq
+observal api GET /api/v1/agents --output json
 ```
 
 ## Related

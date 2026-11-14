@@ -30,6 +30,7 @@ Interested in how contributors are paid? See [Contributor Payments](docs/contrib
 * [Getting Started](CONTRIBUTING.md#getting-started)
 * [Finding Work](CONTRIBUTING.md#finding-work)
 * [Making Changes](CONTRIBUTING.md#making-changes)
+* [Adding a New Harness](#adding-a-new-harness)
 * [Submitting a Pull Request](CONTRIBUTING.md#submitting-a-pull-request)
 * [Code Review Standard](docs/code-review.md)
 * [Reporting Issues](CONTRIBUTING.md#reporting-issues)
@@ -109,7 +110,6 @@ For larger changes, open an issue or discuss in **#contributing** on Discord bef
 ***
 
 ## Making Changes
-
 ### Branch Naming
 
 ```
@@ -169,7 +169,9 @@ Subject line under 72 characters, imperative mood, no trailing period.
 ### Changelog
 
 Add an entry under `[Unreleased]` in [CHANGELOG.md](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CHANGELOG.md) for any user-facing change.
+### Adding a New Harness
 
+To add or promote a harness, follow the [Adding a Harness guide](docs/adding-a-harness.md). It covers the registry entry, CLI and server adapters, hook spec, session parser, doctor and layer wiring, tests, and verification.
 ***
 
 ## Submitting a Pull Request

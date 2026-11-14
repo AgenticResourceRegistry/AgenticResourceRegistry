@@ -1,10 +1,11 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 name: observal-ops
 command: observal
 description: "Inspects Observal traces, sessions, rankings, feedback, telemetry health, logs, and Agent insight reports. Use when the user wants operational evidence, current activity, telemetry diagnosis, ratings, report generation, regression analysis, or recommendations grounded in Agent usage."
-version: 2.4.0
+version: 2.5.0
 owner: observal
 ---
 
@@ -40,6 +41,15 @@ Read the selected reference completely before executing.
 - Lead with reuse suggestions before create-new suggestions.
 - For logs and traces, summarize the minimum sensitive content needed to answer the question.
 
+### Applying suggestions
+
+Apply is deterministic preparation and submission, never automatic approval. The UI starts with no suggestions selected and previews the exact proposed files, checks, compatibility changes and publication order. API callers must send explicit `config_indices`, `feature_indices` and `pattern_indices` arrays to the report's `/preview` route, then send the returned `preview_digest` with the same arrays to `/apply`. Omitted categories are empty, not select-all. Owners/edit-authorized users and admins may submit; readers may not. A stale digest or required preflight failure leaves the report unapplied. New prompt additions must carry `requires_feature_indices` (or [] when independent); older suggestions without valid dependency metadata need a newly generated report. Generated script hooks are not supported for Pi; normal limited user-scope command hooks remain separate. Follow the returned review links for component publication before parent publication.
+
+
 ## Completion
 
 Report the time range, filters, counts, health state, strongest evidence, uncertainty, and concrete next action. Do not present popularity fallback or sparse reports as personalized certainty.
+
+### Partial report generation
+
+A narrative with `generation_state: partial` includes `section_errors` (section, safe error code, attempts). Available sections remain readable. A section-specific JSON `show` includes its errors when present; an empty suggestions result is not the same as a failed suggestions section. Generate a new report to retry failed sections; Apply rejects a failed suggestions section. Older reports without these fields have unknown section-completion coverage.

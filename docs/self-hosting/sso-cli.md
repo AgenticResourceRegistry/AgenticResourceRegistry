@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Agentic Resource Registry SSO, SCIM, and Audit API Reference"
 ---
@@ -11,22 +12,7 @@ For the core CLI reference, see [docs/cli/index.md](/cli). For setup instruction
 
 ## SSO Configuration
 
-| Setting | Default | Description |
-|----------|---------|-------------|
-| `oauth.client_id` | disabled | OAuth/OIDC client ID |
-| `oauth.client_secret` | disabled | OAuth/OIDC client secret |
-| `oauth.server_metadata_url` | disabled | OIDC discovery URL |
-| `deployment.sso_only` | `false` | When true, disables password auth entirely; only SSO login allowed |
-| `saml.idp_entity_id` | disabled | IdP entity ID for SAML SSO |
-| `saml.idp_sso_url` | disabled | IdP single sign-on URL |
-| `saml.idp_x509_cert` | disabled | IdP signing certificate (base64) |
-| `saml.sp_entity_id` | auto | SP entity ID (derived from FRONTEND_URL if empty) |
-| `saml.sp_acs_url` | auto | SP ACS URL (derived from FRONTEND_URL if empty) |
-| `saml.jit_provisioning` | `true` | Auto-create users on first SAML login |
-| `saml.default_role` | `user` | Default role for JIT-provisioned users |
-| `saml.sp_key_encryption_password` | disabled | Encrypt SP private key at rest |
-
-When `deployment.sso_only=true`, password-based login is disabled. All authentication goes through your configured identity provider.
+Use [authentication and SSO](/self-hosting/authentication) for supported identity flows, boot-time versus runtime settings, restart requirements, and SSO-only behavior. This reference is not a second configuration recipe. Server authentication uses JWT bearer access tokens; SCIM provisioning has its own token contract below. Neither is an `X-API-Key` login path.
 
 ---
 
@@ -40,7 +26,7 @@ Query audit log entries. Requires admin role.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `actor` | string | Filter by actor email |
+| `actor` | string | Filter by actor name, username, or email |
 | `action` | string | Filter by action (e.g. `create`, `delete`, `approve`) |
 | `resource_type` | string | Filter by resource type (e.g. `mcp`, `agent`, `user`) |
 | `start_date` | datetime | Start date filter |
@@ -48,19 +34,31 @@ Query audit log entries. Requires admin role.
 | `limit` | int | Max results (1-500, default 50) |
 | `offset` | int | Pagination offset |
 
+Provision an owner-restricted header file through your approved secret mechanism, containing `Authorization: Bearer <JWT_ACCESS_TOKEN>`. Do not commit it or place the token directly in command arguments:
+
 ```bash
-curl "http://localhost/api/v1/admin/audit-log?actor=admin@example.com&limit=20" \
-  -H "X-API-Key: $OBSERVAL_KEY"
+curl --fail --silent --show-error \
+  --header @/run/secrets/registry_authorization_header \
+  'https://registry.example.com/api/v1/admin/audit-log?limit=20'
 ```
 
 ### `GET /api/v1/admin/audit-log/export`
 
-Export audit logs as CSV. Same filters as the query endpoint.
+Export audit logs as CSV by default; `format=json` selects JSON. Actor/action/resource, sensitivity, outcome, source, and date filters are supported. List pagination is not an export bound. Treat exports as sensitive data and select the intended scope.
 
 ```bash
-curl "http://localhost/api/v1/admin/audit-log/export?start_date=2026-01-01" \
-  -H "X-API-Key: $OBSERVAL_KEY" -o audit_log.csv
+umask 077
+EXPORT_DIR="$HOME/registry-audit-exports"
+mkdir -p "$EXPORT_DIR"
+chmod 700 "$EXPORT_DIR"
+curl --fail --silent --show-error \
+  --header @/run/secrets/registry_authorization_header \
+  'https://registry.example.com/api/v1/admin/audit-log/export?format=csv&actor=REQUESTED_ACTOR' \
+  --output "$EXPORT_DIR/audit_log.csv"
+chmod 600 "$EXPORT_DIR/audit_log.csv"
 ```
+
+Replace the URL/filter with your approved deployment and scope; a successful authenticated export is not a complete audit-retention or compliance certification.
 
 ---
 
@@ -105,8 +103,7 @@ Authorization Grant (RFC 8628) to authenticate through a browser.
 observal auth login --sso
 ```
 
-For CI/CD environments without a browser, set the `OBSERVAL_TOKEN`
-environment variable instead.
+For CI/CD without a browser, provision an approved JWT access token using `OBSERVAL_ACCESS_TOKEN_FILE`; token expiry, revocation, and least privilege still apply. Registry tokens are not model-provider or SCIM credentials.
 
 For detailed instructions, see [cli-sso.md](/self-hosting/cli-sso).
 

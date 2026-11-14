@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
@@ -20,6 +21,7 @@ import type {
 } from "@/lib/types";
 import { ErrorState } from "@/components/shared/error-state";
 import { useLegacyInsightReport } from "@/hooks/use-insights-api";
+import { DiscoveryOptimizationSection } from "@/components/insights/discovery-optimization";
 
 function DistributionSection({ versions, harnesses }: { versions?: Record<string, number>; harnesses?: Record<string, number> }) {
   return (
@@ -63,6 +65,7 @@ function SkillReport({ report }: { report: InsightReport }) {
   return (
     <ComponentReportFrame report={report}>
         <ComponentInterpretationPanel narrative={narrative} />
+        <DiscoveryOptimizationSection requested={report.discovery_optimization_requested} result={narrative?.discovery} />
         <EvidencePanel summary={narrative?.summary} stats={[
           { label: "Present sessions", value: metrics?.present_sessions ?? "—" },
           { label: "Confirmed loads", value: <SkillCount value={metrics?.loaded_sessions} measured={measured} />, note: "Sessions where instructions entered context" },
@@ -100,6 +103,7 @@ function HookReport({ report }: { report: InsightReport }) {
   return (
     <ComponentReportFrame report={report}>
         <ComponentInterpretationPanel narrative={narrative} />
+        <DiscoveryOptimizationSection requested={report.discovery_optimization_requested} result={narrative?.discovery} />
         <EvidencePanel summary={narrative?.summary} stats={[
           { label: "Present sessions", value: metrics?.present_sessions ?? "—" },
           { label: "Could run", value: metrics?.eligible_sessions ?? "—", note: "Processed, eligible sessions" },
@@ -132,6 +136,7 @@ function ComponentReport({ report }: { report: InsightReport }) {
   return (
     <ComponentReportFrame report={report}>
           <ComponentInterpretationPanel narrative={narrative} />
+          <DiscoveryOptimizationSection requested={report.discovery_optimization_requested} result={narrative?.discovery} />
           <EvidencePanel summary={summary} stats={[
             { label: "Present sessions", value: metrics?.present_sessions ?? "—" },
             { label: "Observed calls", value: canMeasureCalls ? metrics?.observed_calls ?? "—" : "Not measured" },

@@ -41,7 +41,7 @@ class TestV1HooksFile:
         data = build_kiro_hooks_file()
 
         assert data["version"] == "v1"
-        assert [h["trigger"] for h in data["hooks"]] == ["UserPromptSubmit", "Stop"]
+        assert [h["trigger"] for h in data["hooks"]] == ["UserPromptSubmit", "Stop", "SessionEnd"]
         for hook in data["hooks"]:
             assert hook["action"]["type"] == "command"
 
@@ -293,14 +293,14 @@ def test_detect_hooks_does_not_report_installed_for_an_unreadable_file(tmp_path,
     )
     (config_dir / "agents").mkdir()
     ensure_loaded()
-    monkeypatch.setattr("observal_cli.harness.kiro.use_inline_hooks", lambda home=None: True)
+    monkeypatch.setattr("observal_cli.harness.kiro.kiro_cli_engine", lambda home=None: "v2")
     monkeypatch.setattr("observal_cli.harness.kiro.kiro_ide_installed", lambda home=None: False)
 
     assert get_adapter("kiro").detect_hooks(config_dir) == "missing"
 
     monkeypatch.setattr("observal_cli.harness.kiro.kiro_ide_installed", lambda home=None: True)
 
-    assert get_adapter("kiro").detect_hooks(config_dir) == "installed"
+    assert get_adapter("kiro").detect_hooks(config_dir) == "partial"
 
 
 def test_merge_ignores_a_non_list_hooks_value():

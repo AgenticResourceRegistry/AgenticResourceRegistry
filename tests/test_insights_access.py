@@ -115,6 +115,7 @@ async def _call_agent_route(name: str, agent_id: str, db, user):
 
 
 async def _call_report_route(name: str, report_id: str, db, user):
+    """Invoke the report route with fixture authorization dependencies."""
     import api.routes.insights as insights
 
     if name == "apply_report_suggestions":
@@ -122,7 +123,11 @@ async def _call_report_route(name: str, report_id: str, db, user):
             patch("services.dynamic_settings.get_bool", new=AsyncMock(return_value=True)),
             patch("services.insights.self_learn.apply_insight_suggestions", new=AsyncMock(return_value={})),
         ):
-            return await insights.apply_report_suggestions(report_id, None, db, user)
+            from schemas.insights import ApplySuggestionsRequest
+
+            return await insights.apply_report_suggestions(
+                report_id, ApplySuggestionsRequest(preview_digest="0" * 64), db, user
+            )
     if name == "export_report_html":
         with patch("api.routes.insights.render_report_html", return_value="<html></html>"):
             return await insights.export_report_html(report_id, db, user)

@@ -1073,14 +1073,17 @@ def _write_file_checked(path: Path, content: str | dict, *, merge_mcp: bool = Fa
         )
 
 
-def _rewrite_kiro_agent_profile(content: dict, agent_id: str | None = None) -> dict:
+def _rewrite_kiro_agent_profile(
+    content: dict, agent_id: str | None = None, *, path: Path | None = None, standalone_events: set[str] | None = None
+) -> dict:
     """Prepare a Kiro agent profile for the hook format this machine can read.
 
-    Telemetry hooks normally live in the standalone ``.kiro/hooks/observal.json``
-    file, which every Kiro surface reads. Kiro IDE 1.0 loads an agent carrying
-    inline ``hooks`` but never fires them, so Observal's inline hooks are
-    stripped here and only re-added on machines that are provably legacy Kiro
-    CLI 2.x with no IDE installed.
+    Valid standalone coverage replaces inline telemetry for the configured V3
+    engine, event by event. Configured V2 keeps inline telemetry because it does
+    not read standalone files. Re-patch when changing engines; future launch flag
+    overrides cannot be anticipated while writing the profile.
+    Existing universal array profiles stay arrays; legacy profiles stay event
+    mappings. Unknown user entries are preserved in either shape.
 
     Empty CLI-only tool fields are also dropped. That is what actually keeps an
     agent out of the IDE picker: ProfileLoader rejects any JSON profile carrying
@@ -1090,28 +1093,50 @@ def _rewrite_kiro_agent_profile(content: dict, agent_id: str | None = None) -> d
     server generates bare ``python3``, which won't find ``observal_cli`` when it
     is installed in a project-local virtual environment.
     """
-    from observal_cli.harness.kiro import strip_ide_hostile_fields, use_inline_hooks
-    from observal_cli.harness_specs.kiro_hooks_spec import build_kiro_hooks
+    from observal_cli.harness.kiro import KiroAdapter, needs_inline_compatibility_hooks, strip_ide_hostile_fields
+    from observal_cli.harness_specs.kiro_hooks_spec import build_kiro_hooks, is_observal_v1_hook, iter_kiro_hooks
+
+    hooks = content.get("hooks", {})
+    if not isinstance(hooks, (dict, list)):
+        raise ValueError("Kiro profile hooks must be an object or array")
 
     strip_ide_hostile_fields(content)
+    covered = KiroAdapter.profile_standalone_events(path) if standalone_events is None else standalone_events
+    covered = {event.lower() for event in covered}
+    inline_compatible = needs_inline_compatibility_hooks(cwd=KiroAdapter.profile_workspace(path))
 
-    hooks = content.get("hooks") or {}
+    # Keep the profile's shape and every unrelated entry. Hook placement is
+    # chosen by both compatibility and valid coverage for the target's configured engine.
+    if isinstance(hooks, list):
+        cleaned_array = [entry for entry in hooks if not is_observal_v1_hook(entry)]
+        if inline_compatible:
+            for hook in iter_kiro_hooks(build_kiro_hooks(agent_id=agent_id or "")):
+                if hook.trigger.lower() in covered:
+                    continue
+                name = f"observal-session-push-{hook.trigger.lower()}"
+                cleaned_array.append(
+                    {"name": name, "trigger": hook.trigger, "action": {"type": "command", **hook.handler}}
+                )
+        content["hooks"] = cleaned_array
+        return content
 
-    # Drop Observal-owned inline entries; keep whatever the user added.
     cleaned_hooks: dict = {}
     for event, entries in hooks.items():
         if not isinstance(entries, list):
             cleaned_hooks[event] = entries
             continue
-        # A truthy non-dict entry - a bare string, say - would raise on .get and
-        # abort the whole pull. Malformed user entries are left untouched.
-        kept = [h for h in entries if not (isinstance(h, dict) and "observal_cli" in str(h.get("command", "")))]
+        kept = [h for h in entries if not (isinstance(h, dict) and "observal_cli.hooks" in str(h.get("command", "")))]
         if kept:
             cleaned_hooks[event] = kept
 
-    if use_inline_hooks():
+    if inline_compatible:
         for event, desired_entries in build_kiro_hooks(agent_id=agent_id or "").items():
-            cleaned_hooks[event] = cleaned_hooks.get(event, []) + desired_entries
+            if event.lower() in covered:
+                continue
+            existing = cleaned_hooks.get(event, [])
+            if not isinstance(existing, list):
+                raise ValueError("Kiro hook event handlers must be an array")
+            cleaned_hooks[event] = existing + desired_entries
 
     if cleaned_hooks:
         content["hooks"] = cleaned_hooks
@@ -2070,7 +2095,7 @@ def rewrite_observal_interpreter(value):
     return value
 
 
-def _localize_hooks_content(content, adapter, agent_id: str):
+def _localize_hooks_content(content, adapter, agent_id: str, *, path: Path | None = None):
     """A hooks config with resolved hook script paths and launchers on this CLI's interpreter."""
     if isinstance(content, str):
         return _pin_hook_interpreter(_resolve_hook_paths(content))
@@ -2078,14 +2103,19 @@ def _localize_hooks_content(content, adapter, agent_id: str):
         # Resolve hook paths inside JSON content (command fields)
         raw = _resolve_hook_paths(json.dumps(content))
         # Launchers are rewritten in the parsed strings, so no interpreter path can break the JSON.
-        return adapter.rewrite_hooks(rewrite_launchers_in_strings(json.loads(raw)), agent_id=agent_id)
+        kwargs = {"path": path} if path is not None else {}
+        return adapter.rewrite_hooks(rewrite_launchers_in_strings(json.loads(raw)), agent_id=agent_id, **kwargs)
     return content
 
 
-def _localize_agent_profile(agent_profile: dict, adapter, agent_id: str) -> None:
+def _localize_agent_profile(agent_profile: dict, adapter, agent_id: str, *, path: Path | None = None) -> None:
     """Point an agent profile's Observal launchers at this CLI's interpreter, in place."""
     if isinstance(agent_profile.get("content"), dict):
-        agent_profile["content"] = adapter.rewrite_agent_profile(agent_profile["content"], agent_id=agent_id)
+        content = agent_profile["content"]
+        if path is not None:
+            content = adapter.merge_agent_profile(content, path)
+        kwargs = {"path": path} if path is not None else {}
+        agent_profile["content"] = adapter.rewrite_agent_profile(content, agent_id=agent_id, **kwargs)
     elif isinstance(agent_profile.get("content"), str):
         # Claude Code and other markdown agents carry their hooks in frontmatter. Isolated
         # launchers first; any launcher that rewrite declines (a YAML block scalar, say)
@@ -2711,7 +2741,7 @@ def write_install_snippet(
     hooks_cfg = snippet.get("hooks_config")
     if hooks_cfg and isinstance(hooks_cfg, dict) and "path" in hooks_cfg:
         p = _resolve_path(hooks_cfg["path"], target_dir, allow_home=is_user_scope)
-        content = _localize_hooks_content(hooks_cfg["content"], adapter, agent_id)
+        content = _localize_hooks_content(hooks_cfg["content"], adapter, agent_id, path=p)
         if dry_run:
             written.append((str(p), "would write"))
         else:
@@ -2723,9 +2753,40 @@ def write_install_snippet(
     if agent_profile:
         # Rewrite hook commands to use the current Python interpreter
         # so they work regardless of which directory Kiro is launched from.
-        _localize_agent_profile(agent_profile, adapter, agent_id)
         agent_profile_allow_home = adapter.allow_home_agent_profile(is_user_scope)
         p = _resolve_path(agent_profile["path"], target_dir, allow_home=agent_profile_allow_home)
+        try:
+            _localize_agent_profile(agent_profile, adapter, agent_id, path=p)
+        except (CliError, OSError, ValueError) as error:
+            # Preparing a profile reads local state after earlier config writes.
+            # Keep these failures on the same partial-pull/rollback path as writes.
+            partial = _pull_failure_result(
+                written,
+                "prepare_agent_profile",
+                failed_path=str(p),
+                installation_tracked=False,
+                dry_run=dry_run,
+            )
+            if isinstance(error, CliError):
+                if error.result is None:
+                    error.result = partial
+                raise
+            category = (
+                ErrorCategory.PERMISSION
+                if isinstance(error, PermissionError)
+                else ErrorCategory.UNAVAILABLE
+                if isinstance(error, OSError)
+                else ErrorCategory.VALIDATION
+            )
+            fail(
+                category,
+                f"Could not prepare generated agent profile: {p}.",
+                operation="Pull agent",
+                resource=str(p),
+                remediation="Repair the local profile or its filesystem permissions, then retry.",
+                detail=repr(error),
+                result=partial,
+            )
         if dry_run:
             written.append((str(p), "would write"))
         else:

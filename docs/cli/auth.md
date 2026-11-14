@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal auth"
 ---
@@ -35,7 +36,7 @@ Successful human login first installs the Claude Code session hooks when Claude 
 
 `provider` picks the browser SSO provider: `oidc`, `saml`, `google` or `github`. It implies `sso`, and the CLI rejects a provider the server has not enabled, or `saml` combined with a different `provider`. A bare `sso` uses the only enabled provider, or asks which one when the server enables several. JSON mode and non-interactive input never ask, so a bare `sso` there falls back to the server default (OIDC, then SAML); pass `provider` to choose.
 
-Every CLI invocation also computes a SHA-256 hash for each installed Agentic Resource Registry-managed skill tree. A mismatched tree is replaced completely from the packaged bundle, including references and scripts, so local edits and stale extra files do not survive. Skill directories outside the six bundled Agentic Resource Registry names are untouched.
+Ordinary CLI startup also computes a SHA-256 hash for each installed Agentic Resource Registry-managed skill tree. A mismatched tree is replaced completely from the packaged bundle, including references and scripts, so local edits and stale extra files do not survive. Skill directories outside the six bundled Agentic Resource Registry names are untouched. `scan --inventory` bypasses this synchronization as part of its read-only contract.
 
 Credential JSON login emits one safe object and never includes tokens or passwords:
 

@@ -538,6 +538,10 @@ class TestPullKiro:
         import observal_cli.harness.kiro as kiro_adapter
 
         monkeypatch.setattr(kiro_adapter, "use_inline_hooks", lambda *_a, **_k: False)
+        monkeypatch.setenv("KIRO_HOME", str(tmp_path / "kiro-home"))
+        monkeypatch.setenv("OBSERVAL_KIRO_ENGINE", "v3")
+        monkeypatch.setenv("OBSERVAL_KIRO_CLI_VERSION", "3.0")
+        monkeypatch.setenv("OBSERVAL_KIRO_IDE", "0")
         result = self._pull(tmp_path)
 
         assert result.exit_code == 0, result.output
@@ -549,6 +553,10 @@ class TestPullKiro:
         import observal_cli.harness.kiro as kiro_adapter
 
         monkeypatch.setattr(kiro_adapter, "use_inline_hooks", lambda *_a, **_k: False)
+        monkeypatch.setenv("KIRO_HOME", str(tmp_path / "kiro-home"))
+        monkeypatch.setenv("OBSERVAL_KIRO_ENGINE", "v3")
+        monkeypatch.setenv("OBSERVAL_KIRO_CLI_VERSION", "3.0")
+        monkeypatch.setenv("OBSERVAL_KIRO_IDE", "0")
         result = self._pull(tmp_path)
 
         assert result.exit_code == 0, result.output
@@ -557,7 +565,7 @@ class TestPullKiro:
         data = json.loads(hooks_file.read_text())
         assert data["version"] == "v1"
         triggers = {h["trigger"] for h in data["hooks"]}
-        assert triggers == {"UserPromptSubmit", "Stop"}
+        assert triggers == {"UserPromptSubmit", "Stop", "SessionEnd"}
         for hook in data["hooks"]:
             command = hook["action"]["command"]
             assert sys.executable in command, f"hook missing sys.executable: {command}"
