@@ -123,10 +123,24 @@ Cursor MCP configs use the `mcpServers` key.
 | ------------------ | -------------------- |
 | `PreToolUse`       | `preToolUse`         |
 | `PostToolUse`      | `postToolUse`        |
-| `Stop`             | `sessionEnd`         |
+| `Stop`             | `stop`               |
 | `SessionStart`     | `sessionStart`       |
 | `UserPromptSubmit` | `beforeSubmitPrompt` |
 | `SubagentStop`     | `subagentStop`       |
+
+`observal doctor patch --harness cursor` installs the four events that drive
+session delivery: `beforeSubmitPrompt`, `preToolUse`, `postToolUse` and `stop`.
+The event set lives in `observal_cli/harness_specs/cursor_hooks_spec.py`, which is
+the single source of truth for both the patch and the doctor check. `stop` is the
+final event: the adapter treats it as the session end, so the hook finalizes the
+session and crash recovery skips it.
+
+`preToolUse` is a *permission* event. Cursor parses the hook's stdout and blocks
+the tool call when the output is not valid permission JSON, so Cursor hooks run
+through `observal_cli/hooks/cursor_session_push.py`. That bridge performs the
+shared delivery and then answers `{"continue": true, "permission": "allow"}` --
+even when delivery fails, because a permission hook that exits without valid JSON
+blocks the tool call. The hook only observes; it never denies a tool call.
 
 ---
 

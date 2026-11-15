@@ -466,18 +466,21 @@ def _check_cursor(issues: list, warnings: list):
         issues.append(f"{hooks_path}: not valid JSON.")
         return
 
-    hooks = data.get("hooks", {})
-    has_session_push = False
-    for event in ("beforeSubmitPrompt", "stop"):
-        entries = hooks.get(event, [])
-        for e in entries:
-            if "hooks.session_push --harness cursor" in e.get("command", ""):
-                has_session_push = True
-                break
+    from observal_cli.harness_specs.cursor_hooks_spec import CURSOR_HOOK_EVENTS
 
-    if not has_session_push:
+    hooks = data.get("hooks", {})
+    missing = []
+    for event in CURSOR_HOOK_EVENTS:
+        entries = hooks.get(event, [])
+        has_observal = any("hooks.cursor_session_push" in e.get("command", "") for e in entries)
+        if not has_observal:
+            missing.append(event)
+
+    if missing:
         warnings.append(
-            "Cursor session push hooks not installed. Run `observal doctor patch --harness cursor` to inject them."
+            "Cursor session push hooks missing for "
+            + ", ".join(missing)
+            + ". Run `observal doctor patch --harness cursor` to inject them."
         )
 
 
@@ -1192,9 +1195,7 @@ def _cleanup_cursor(dry_run: bool) -> bool:
         if not isinstance(entries, list):
             continue
         cleaned = [
-            h
-            for h in entries
-            if "cursor_session_push" not in h.get("command", "") and "session_push" not in h.get("command", "")
+            h for h in entries if not (isinstance(h, dict) and _is_observal_hook_entry(h, include_generic_marker=False))
         ]
         if len(cleaned) < len(entries):
             removed_events.append(f"{event} ({len(entries) - len(cleaned)} removed)")
@@ -1592,20 +1593,11 @@ def _patch_cursor(dry_run: bool) -> bool:
         rprint("  [dim]No ~/.cursor/ directory - skipping[/dim]")
         return False
 
-    # Use the current interpreter (from the observal CLI's venv) so that
-    # httpx and other dependencies are available when Cursor fires the hook,
-    # with PYTHONPATH when it cannot import observal_cli on its own.
-    from observal_cli.shared.launcher import module_command
+    # The hook command and the event set live in the Cursor hook spec so
+    # that the spec is the single source of truth for what Cursor installs.
+    from observal_cli.harness_specs.cursor_hooks_spec import CURSOR_HOOK_EVENTS, build_cursor_hooks
 
-    cmd = f"{module_command('observal_cli.hooks.session_push')} --harness cursor"
-
-    desired = {
-        "version": 1,
-        "hooks": {
-            "beforeSubmitPrompt": [{"command": cmd, "type": "command"}],
-            "stop": [{"command": cmd, "type": "command"}],
-        },
-    }
+    desired = {"version": 1, **build_cursor_hooks()}
 
     # Load existing hooks.json if present
     existing = {}
@@ -1616,9 +1608,9 @@ def _patch_cursor(dry_run: bool) -> bool:
     existing_hooks = existing.get("hooks", {})
     needs_update = False
 
-    for event in ("beforeSubmitPrompt", "stop"):
+    for event in CURSOR_HOOK_EVENTS:
         entries = existing_hooks.get(event, [])
-        has_observal = any("hooks.session_push --harness cursor" in e.get("command", "") for e in entries)
+        has_observal = any("hooks.cursor_session_push" in e.get("command", "") for e in entries)
         if not has_observal:
             needs_update = True
             break
@@ -1627,15 +1619,14 @@ def _patch_cursor(dry_run: bool) -> bool:
         rprint("  [dim]Already up to date[/dim]")
         return False
 
-    # Merge: keep existing non-Observal hooks, add ours
+    # Merge: keep existing non-Observal hooks, add ours. Events that
+    # Cursor supports but Observal does not use are left untouched.
     merged_hooks = existing_hooks.copy()
     for event, desired_entries in desired["hooks"].items():
         current = merged_hooks.get(event, [])
         # Remove old Observal hooks
         cleaned = [
-            h
-            for h in current
-            if "cursor_session_push" not in h.get("command", "") and "session_push" not in h.get("command", "")
+            h for h in current if not (isinstance(h, dict) and _is_observal_hook_entry(h, include_generic_marker=False))
         ]
         merged_hooks[event] = cleaned + desired_entries
 

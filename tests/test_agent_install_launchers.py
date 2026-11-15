@@ -152,13 +152,13 @@ def test_hook_config_launchers_are_localized_for_hooks_file_harnesses(installed)
             "path": ".cursor/hooks.json",
             "content": {
                 "version": 1,
-                "hooks": {"stop": [{"command": "python3 -m observal_cli.hooks.session_push --harness cursor"}]},
+                "hooks": {"stop": [{"command": "python3 -m observal_cli.hooks.cursor_session_push"}]},
             },
         }
     }
     localized = localize_install_snippet(snippet, adapter=get_adapter("cursor"), agent_id="agent-uuid")
     (hook,) = localized["hooks_config"]["content"]["hooks"]["stop"]
-    assert hook["command"] == (f"{_interpreter_prefix(installed)} -m observal_cli.hooks.session_push --harness cursor")
+    assert hook["command"] == (f"{_interpreter_prefix(installed)} -m observal_cli.hooks.cursor_session_push")
     assert snippet["hooks_config"]["content"]["hooks"]["stop"][0]["command"].startswith(BARE)
 
 

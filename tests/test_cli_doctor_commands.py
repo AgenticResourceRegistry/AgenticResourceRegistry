@@ -23,6 +23,7 @@ from typer.testing import CliRunner
 import observal_cli.cmd_doctor as doctor_module
 from observal_cli import pi_extension
 from observal_cli.harness.protocol import NotSupportedError
+from observal_cli.harness_specs.cursor_hooks_spec import CURSOR_HOOK_EVENTS
 from observal_cli.shared import launcher
 
 # Fixed regardless of what observal-cli version this test environment actually
@@ -403,7 +404,10 @@ class TestHarnessDiagnosisState:
             (
                 ".cursor/hooks.json",
                 doctor_module._check_cursor,
-                {"beforeSubmitPrompt": [{"command": "python -m hooks.session_push --harness cursor"}]},
+                {
+                    event: [{"command": "python -m observal_cli.hooks.cursor_session_push"}]
+                    for event in CURSOR_HOOK_EVENTS
+                },
             ),
             (
                 ".copilot/hooks/observal.json",

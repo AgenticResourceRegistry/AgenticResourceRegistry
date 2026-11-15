@@ -77,7 +77,17 @@ _KIRO_V1_MATCHER_TRIGGERS = {
 
 # Session push hook command - reads JSONL incrementally, only needs 2 events.
 _SESSION_PUSH_CMD = "python3 -m observal_cli.hooks.session_push"
-_CURSOR_SESSION_PUSH_CMD = "python3 -m observal_cli.hooks.session_push --harness cursor"
+# Cursor needs the bridge module: preToolUse is a permission hook, and Cursor
+# blocks the tool call when the hook does not answer with valid permission JSON.
+_CURSOR_SESSION_PUSH_CMD = "python3 -m observal_cli.hooks.cursor_session_push"
+# The four Cursor events that drive session delivery. Keep in sync with
+# observal_cli/harness_specs/cursor_hooks_spec.py.
+_CURSOR_SESSION_PUSH_EVENTS = (
+    "beforeSubmitPrompt",
+    "preToolUse",
+    "postToolUse",
+    "stop",
+)
 
 
 # The two events that drive JSONL-based telemetry collection.
@@ -202,20 +212,13 @@ def _custom_hook_matcher_lines(hook: dict) -> list[str]:
 def _cursor_hooks_config(platform: str = "") -> dict:
     """Build .cursor/hooks.json content with Observal telemetry hooks.
 
-    Cursor uses beforeSubmitPrompt (fires after user hits send) and stop
-    (fires when the agent loop ends).
+    Cursor fires beforeSubmitPrompt (after the user hits send), preToolUse and
+    postToolUse (around each tool call), and stop (when the agent loop ends).
     """
-    cmd = (
-        "python -m observal_cli.hooks.session_push --harness cursor"
-        if platform == "win32"
-        else _CURSOR_SESSION_PUSH_CMD
-    )
+    cmd = "python -m observal_cli.hooks.cursor_session_push" if platform == "win32" else _CURSOR_SESSION_PUSH_CMD
     return {
         "version": 1,
-        "hooks": {
-            "beforeSubmitPrompt": [{"command": cmd, "type": "command"}],
-            "stop": [{"command": cmd, "type": "command"}],
-        },
+        "hooks": {event: [{"command": cmd, "type": "command"}] for event in _CURSOR_SESSION_PUSH_EVENTS},
     }
 
 

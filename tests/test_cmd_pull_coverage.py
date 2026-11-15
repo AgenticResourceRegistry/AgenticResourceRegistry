@@ -218,15 +218,12 @@ def test_component_conflicts_report_only_other_agent_versions(monkeypatch: pytes
 
 def test_pin_hook_interpreter_is_idempotent_and_json_safe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cmd_pull.sys, "executable", r"C:\Users\ada\observal\python.exe")
-    source = json.dumps({"command": "python3 -m observal_cli.hooks.session_push --harness cursor"})
+    source = json.dumps({"command": "python3 -m observal_cli.hooks.cursor_session_push"})
 
     once = cmd_pull._pin_hook_interpreter(source)
 
     # Backslashes in the interpreter must neither break re.sub nor the JSON string.
-    assert (
-        json.loads(once)["command"]
-        == "C:/Users/ada/observal/python.exe -m observal_cli.hooks.session_push --harness cursor"
-    )
+    assert json.loads(once)["command"] == "C:/Users/ada/observal/python.exe -m observal_cli.hooks.cursor_session_push"
     assert cmd_pull._pin_hook_interpreter(once) == once
     assert (
         cmd_pull._pin_hook_interpreter("/opt/venv/bin/python3 -m observal_cli.x")
@@ -240,10 +237,10 @@ def test_pin_hook_interpreter_is_idempotent_and_json_safe(monkeypatch: pytest.Mo
 
 def test_pin_hook_interpreter_quotes_paths_with_spaces(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cmd_pull.sys, "executable", "/tmp/Observal Tools/bin/python3")
-    source = json.dumps({"command": "python3 -m observal_cli.hooks.session_push --harness cursor"})
+    source = json.dumps({"command": "python3 -m observal_cli.hooks.cursor_session_push"})
     result = cmd_pull._pin_hook_interpreter(source)
     command = json.loads(result)["command"]
-    assert command == "'/tmp/Observal Tools/bin/python3' -m observal_cli.hooks.session_push --harness cursor"
+    assert command == "'/tmp/Observal Tools/bin/python3' -m observal_cli.hooks.cursor_session_push"
     assert cmd_pull._pin_hook_interpreter(result) == result
 
 
@@ -4393,3 +4390,111 @@ def test_kiro_profile_merge_failure_reports_prior_writes_and_recovers_folders(
     else:
         rollback.assert_not_called()
         transact.assert_not_called()
+
+
+def test_pull_merge_keeps_a_user_pretooluse_deny_hook(tmp_path: Path) -> None:
+    """A pull must never drop a user-owned deny hook from a hook event list."""
+    path = tmp_path / "hooks.json"
+    deny = {"command": "guard --deny rm -rf", "type": "command"}
+    path.write_text(json.dumps({"version": 1, "hooks": {"preToolUse": [deny]}}))
+
+    observal = {"command": "python3 -m observal_cli.hooks.cursor_session_push", "type": "command"}
+    assert cmd_pull._write_file(path, {"version": 1, "hooks": {"preToolUse": [observal]}}, merge_mcp=True) == "merged"
+
+    entries = json.loads(path.read_text())["hooks"]["preToolUse"]
+    assert deny in entries
+    assert observal in entries
+
+
+def test_pull_merge_is_idempotent_for_hook_event_lists(tmp_path: Path) -> None:
+    """Repeating the same pull must not duplicate either the user or Observal hook."""
+    path = tmp_path / "hooks.json"
+    user = {"command": "user-stop", "type": "command"}
+    observal = {"command": "python3 -m observal_cli.hooks.cursor_session_push", "type": "command"}
+    path.write_text(json.dumps({"version": 1, "hooks": {"stop": [user]}}))
+    content = {"version": 1, "hooks": {"stop": [observal]}}
+
+    for _ in range(3):
+        cmd_pull._write_file(path, content, merge_mcp=True)
+
+    assert json.loads(path.read_text())["hooks"]["stop"] == [user, observal]
+
+
+def test_pull_merge_does_not_duplicate_user_hook_components(tmp_path: Path) -> None:
+    """User-submitted hook components ride along in the incoming config on every pull.
+
+    The server appends them to the generated hooks.json, so a plain value-dedup
+    would be enough for a re-pull -- but the generated command spelling may differ
+    (``python3`` vs ``python``, argv list vs string). The second pull must still
+    leave exactly one copy of the user component.
+    """
+    path = tmp_path / "hooks.json"
+    user_component = {"command": "guard --deny rm -rf", "type": "command"}
+    observal = {"command": "python3 -m observal_cli.hooks.cursor_session_push", "type": "command"}
+    path.write_text(json.dumps({"version": 1, "hooks": {"preToolUse": [user_component]}}))
+
+    # Every pull sends Observal + the same user component, as the generator does.
+    content = {"version": 1, "hooks": {"preToolUse": [observal, {**user_component}]}}
+    for _ in range(3):
+        cmd_pull._write_file(path, content, merge_mcp=True)
+
+    entries = json.loads(path.read_text())["hooks"]["preToolUse"]
+    assert entries.count(user_component) == 1
+    assert entries.count(observal) == 1
+
+
+def test_pull_merge_matches_argv_and_string_commands(tmp_path: Path) -> None:
+    """A handler whose command is an argv list equals the string spelling."""
+    path = tmp_path / "hooks.json"
+    as_list = {"command": ["python3", "guard.py", "--deny", "rm -rf"], "type": "command"}
+    as_string = {"command": "python3 guard.py --deny rm -rf", "type": "command"}
+    path.write_text(json.dumps({"version": 1, "hooks": {"postToolUse": [as_list]}}))
+
+    cmd_pull._write_file(
+        path,
+        {"version": 1, "hooks": {"postToolUse": [{"type": "command", "command": "python3 guard.py --deny rm -rf"}]}},
+        merge_mcp=True,
+    )
+
+    entries = json.loads(path.read_text())["hooks"]["postToolUse"]
+    assert entries == [as_list]
+
+
+def test_pull_merge_matches_string_and_argv_commands(tmp_path: Path) -> None:
+    """The reverse spelling also collapses: an incoming argv list matches an existing string."""
+    path = tmp_path / "hooks.json"
+    as_list = {"command": ["python3", "guard.py", "--deny", "rm -rf"], "type": "command"}
+    as_string = {"command": "python3 guard.py --deny rm -rf", "type": "command"}
+    path.write_text(json.dumps({"version": 1, "hooks": {"postToolUse": [as_string]}}))
+
+    cmd_pull._write_file(
+        path,
+        {"version": 1, "hooks": {"postToolUse": [as_list]}},
+        merge_mcp=True,
+    )
+
+    entries = json.loads(path.read_text())["hooks"]["postToolUse"]
+    assert entries == [as_string]
+
+
+def test_pull_keeps_user_hook_whose_path_contains_observal_cli(tmp_path: Path) -> None:
+    """A user's own guard script under an ``observal_cli`` directory is not Observal-owned."""
+    path = tmp_path / "hooks.json"
+    user_hook = {"type": "command", "command": "python3 ~/src/observal_cli/guard.py --deny"}
+    telemetry = {"type": "command", "command": "python3 -m observal_cli.hooks.cursor_session_push"}
+    path.write_text(json.dumps({"version": 1, "hooks": {"preToolUse": [user_hook, telemetry]}}))
+
+    cmd_pull._write_file(
+        path,
+        {
+            "version": 1,
+            "hooks": {
+                "preToolUse": [{"type": "command", "command": "python3 -m observal_cli.hooks.cursor_session_push"}]
+            },
+        },
+        merge_mcp=True,
+    )
+
+    entries = json.loads(path.read_text())["hooks"]["preToolUse"]
+    assert user_hook in entries
+    assert entries.count(telemetry) == 1

@@ -41,7 +41,7 @@ Known gaps, not tiers:
 - **Cursor has no `skills` capability.**
 - **Legacy scan coverage is scope-specific.** OpenCode scans MCPs, skills, hooks and agents in home and project scope. Claude Code and Kiro home scans cover those four categories; their project scans cover MCPs. Antigravity home scans cover all four, and project scans cover MCPs and skills. Copilot CLI home scans cover MCPs, skills and hooks, and project scans also cover agents. Goose home scans cover all four; project scans cover skills, hooks and agents (MCP config is user-level). Pi scans MCPs and skills in both scopes; Codex, Copilot and Cursor legacy scans cover MCPs. Bounded `discover_home()` / `discover_project()` power the separate read-only `scan --inventory` path.
 - **Playwright coverage** is harness-specific only for Kiro (9 specs). The other harnesses are covered by pytest in `tests/`.
-- Cursor and Pi do not have a `harness_specs/` module: Cursor writes its hooks from the adapter, and Pi runs registry hooks and telemetry through the bundled extension (see `docs/integrations/pi.md`).
+- Pi does not have a `harness_specs/` module: it runs registry hooks and telemetry through the bundled extension (see `docs/integrations/pi.md`). Cursor moved into `harness_specs/cursor_hooks_spec.py`, which is the single source of truth for its four hook events.
 
 See `docs/adding-a-harness.md` for the complete guide to adding or promoting a harness.
 
