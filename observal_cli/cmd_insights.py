@@ -42,6 +42,8 @@ insights_app = typer.Typer(
 )
 
 _REPORT_PAGE_SIZE = 100
+_ERROR_RATE_WARNING_THRESHOLD = 0.01
+_ERROR_RATE_CRITICAL_THRESHOLD = 0.1
 _registry_name_cache: str | None = None
 
 
@@ -1103,7 +1105,11 @@ def _render_usage_patterns(title: str, data: dict):
         t.add_column("Error %", justify="right")
         for tool in tools[:10]:
             err = tool.get("error_rate", 0)
-            err_style = "red" if err > 0.1 else "yellow" if err > 0.01 else "green"
+            err_style = (
+                "red"
+                if err > _ERROR_RATE_CRITICAL_THRESHOLD
+                else "yellow" if err > _ERROR_RATE_WARNING_THRESHOLD else "green"
+            )
             t.add_row(esc(tool.get("tool", "")), esc(tool.get("calls", "")), f"[{err_style}]{err:.1%}[/{err_style}]")
         console.print(t)
         rprint()
