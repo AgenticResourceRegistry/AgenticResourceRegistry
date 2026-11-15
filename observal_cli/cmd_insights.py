@@ -41,6 +41,10 @@ insights_app = typer.Typer(
     )
 )
 
+_REPORT_PAGE_SIZE = 100
+_ERROR_RATE_WARNING_THRESHOLD = 0.01
+_ERROR_RATE_CRITICAL_THRESHOLD = 0.1
+_MAX_COMPONENT_REPORT_DAYS = 90
 _registry_name_cache: str | None = None
 
 
@@ -350,24 +354,24 @@ def insights_list(
             if component
             else f"/api/v1/agents/{_resolve_agent_id(agent_id)}/insights/reports"
         )
-        data = client.get(f"{path}?limit=100" if all_reports else path)
+        data = client.get(f"{path}?limit={_REPORT_PAGE_SIZE}" if all_reports else path)
         if all_reports:
             from urllib.parse import urlencode
 
-            while len(data) and len(data) % 100 == 0:
+            while len(data) and len(data) % _REPORT_PAGE_SIZE == 0:
                 last = data[-1]
                 page = client.get(
                     f"{path}?"
                     + urlencode(
                         {
-                            "limit": 100,
+                            "limit": _REPORT_PAGE_SIZE,
                             "before_created_at": last["created_at"],
                             "before_id": last["id"],
                         }
                     )
                 )
                 data.extend(page)
-                if len(page) < 100:
+                if len(page) < _REPORT_PAGE_SIZE:
                     break
     if output == "json":
         output_json(data)
@@ -1102,7 +1106,11 @@ def _render_usage_patterns(title: str, data: dict):
         t.add_column("Error %", justify="right")
         for tool in tools[:10]:
             err = tool.get("error_rate", 0)
-            err_style = "red" if err > 0.1 else "yellow" if err > 0.01 else "green"
+            err_style = (
+                "red"
+                if err > _ERROR_RATE_CRITICAL_THRESHOLD
+                else "yellow" if err > _ERROR_RATE_WARNING_THRESHOLD else "green"
+            )
             t.add_row(esc(tool.get("tool", "")), esc(tool.get("calls", "")), f"[{err_style}]{err:.1%}[/{err_style}]")
         console.print(t)
         rprint()
@@ -1392,10 +1400,10 @@ def insights_generate(
             "--compare applies to Agent reports only.",
             operation="Generate component insight report",
         )
-    if component and period_days > 90:
+    if component and period_days > _MAX_COMPONENT_REPORT_DAYS:
         fail(
             ErrorCategory.VALIDATION,
-            "Component reports support at most 90 days.",
+            f"Component reports support at most {_MAX_COMPONENT_REPORT_DAYS} days.",
             operation="Generate component insight report",
         )
     component_version = agent_version if component else None
