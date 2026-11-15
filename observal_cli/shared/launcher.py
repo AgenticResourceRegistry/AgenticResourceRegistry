@@ -20,7 +20,8 @@ root, may supply ``observal_cli``:
   any inherited value.
 
 The same rule applies to the CLI's own child processes (:func:`module_subprocess`),
-which inherit the caller's working directory, often a project.
+which inherit the caller's working directory, often a project, and to installed
+``observal`` executables the CLI runs (:func:`script_env`).
 """
 
 from __future__ import annotations
@@ -96,6 +97,24 @@ def module_subprocess(module: str, *args: str, options: tuple[str, ...] = ()) ->
         return [sys.executable, "-I", *options, "-m", module, *args], env
     env.update(pythonpath_env())
     return [sys.executable, isolation_flag(), *options, "-m", module, *args], env
+
+
+def script_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Environment for running an installed ``observal`` executable (console script or binary) as a child.
+
+    Running a script never puts the working directory on ``sys.path``, but the
+    ``PYTHON*`` variables still apply, and an inherited ``PYTHONPATH`` would
+    supply its own ``observal_cli`` in place of the installed one. It is always
+    dropped: the child must be the installation, not whatever the caller's
+    environment adds. A process that is itself isolated (``-I``) ignored every
+    ``PYTHON*`` variable and user site-packages, so its child does the same.
+    """
+    source = os.environ if base is None else base
+    if sys.flags.isolated:
+        env = {key: value for key, value in source.items() if not key.upper().startswith("PYTHON")}
+        env["PYTHONNOUSERSITE"] = "1"
+        return env
+    return {key: value for key, value in source.items() if key.upper() != "PYTHONPATH"}
 
 
 def _hex(text: str) -> str:

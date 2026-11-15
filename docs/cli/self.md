@@ -19,6 +19,15 @@ All four workflows support `--output table|json`. JSON upgrade, downgrade, and r
 
 The destructive uninstall workflow has been removed.
 
+## Automatic sync with the server
+
+A server accepts only a CLI on its own exact version, so the CLI keeps itself there. At `observal auth login`, and whenever a later command finds a mismatch, it installs the server's version (upgrade or downgrade) with the tool that owns the installation, brings other `observal` copies on `PATH` to the same version, and re-runs the command. There is no prompt and no setting to turn it off.
+
+- A command that had already sent a request or read piped input is synced but not re-run: it exits with code 10, and you run it again.
+- A development server (`X.Y.Z-dev.N`) is matched by building its `build_commit` from `GET /api/v1/config/version`, only if that commit is on `main` or a `release/*` branch. This needs `git`.
+- `observal self ...`, `observal server ...`, hooks and MCP servers never sync.
+- If the sync cannot complete, the command fails with exit code 10 and prints why and the command to run.
+
 ## Status
 
 ```bash

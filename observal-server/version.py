@@ -8,6 +8,7 @@ Shared between the version middleware and the /config/version endpoint.
 
 from __future__ import annotations
 
+import os
 import re
 from functools import lru_cache
 from importlib.metadata import version as pkg_version
@@ -36,3 +37,18 @@ def get_server_version() -> str:
     except Exception:
         pass
     return "dev"
+
+
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+
+
+@lru_cache(maxsize=1)
+def get_build_commit() -> str | None:
+    """Git commit this server image was built from, when the build recorded one.
+
+    Development builds share a version across many commits, so the CLI needs the
+    commit to build a matching copy of itself. Set through the
+    ``OBSERVAL_BUILD_COMMIT`` build argument in ``docker/Dockerfile.api``.
+    """
+    value = os.environ.get("OBSERVAL_BUILD_COMMIT", "").strip().lower()
+    return value if _COMMIT_RE.fullmatch(value) else None

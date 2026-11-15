@@ -6,7 +6,7 @@
 name: observal
 command: observal
 description: "Use when starting any task the organization may already have an approved skill, prompt, MCP server, or Agent for: reviewing code, a commit, a diff, or a pull request; writing tests or documentation; querying a database, API, or service; automating a browser or web page; running untrusted code; connecting to a SaaS tool; drafting, researching, or any other substantive work. The user will not mention Observal: the task type is the trigger. Check what is already installed, then run observal discover search as the first action, before reading the repository or working from scratch. Also use when the user wants to log in, configure Observal, inspect local harness setup, share or open a repository Agent share, manage a teamspace or invitation, process inbox items, check installed registry items, or call an endpoint without a dedicated command."
-version: 2.11.0
+version: 2.12.0
 owner: observal
 ---
 

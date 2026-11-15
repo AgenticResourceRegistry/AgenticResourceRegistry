@@ -276,10 +276,25 @@ def test_version_check_dev_server_gives_source_install_command(monkeypatch: pyte
         auth._ensure_cli_matches_server(SERVER_URL)
 
     assert exc_info.value.category is ErrorCategory.VERSION
-    assert "git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main" in (
-        exc_info.value.remediation or ""
-    )
-    assert "observal-cli==1.15.0-dev.0" not in (exc_info.value.remediation or "")
+    # `self upgrade` builds only a published commit; a raw install of `main` would follow a moving branch.
+    assert exc_info.value.remediation == "Run observal self upgrade --version 1.15.0-dev.0 --force, then retry."
+
+
+def test_version_check_without_git_says_to_install_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    import shutil
+
+    import observal_cli.version_check as version_check
+
+    monkeypatch.setattr(version_check, "get_current_version", lambda: "1.13.1")
+    monkeypatch.setattr(auth.httpx, "get", lambda *_args, **_kwargs: _response(200, {"server_version": "1.15.0-dev.0"}))
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    with pytest.raises(CliError) as exc_info:
+        auth._ensure_cli_matches_server(SERVER_URL)
+
+    # Not a `uv tool install git+...` command: that needs the git that is missing.
+    assert exc_info.value.remediation.startswith("Install git with `")
+    assert "git+" not in exc_info.value.remediation
 
 
 def _prepare_login(
@@ -1281,9 +1296,13 @@ def test_password_login_completes_mandatory_password_change(
     monkeypatch.setattr(auth, "_fetch_endpoints", lambda _url: {})
     monkeypatch.setattr(auth.config, "save", save)
     monkeypatch.setattr(auth, "_post_login_setup", MagicMock())
+    monkeypatch.setattr(auth.client, "_requests_completed", 0)
 
     auth._do_password_login(SERVER_URL, "ada", "Temporary1!")
 
+    # Both writes are counted (the login, then the password change), so a 426 later in this login
+    # syncs the CLI without re-running either.
+    assert auth.client._requests_completed == 2
     put.assert_called_once_with(
         f"{SERVER_URL}/api/v1/auth/profile/password",
         json={"current_password": "Temporary1!", "new_password": VALID_PASSWORD},

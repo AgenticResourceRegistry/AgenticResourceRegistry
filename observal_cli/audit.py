@@ -59,6 +59,9 @@ def emit_cli_audit(
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=5.0,
             )
+            from observal_cli import client
+
+            client.record_completed_request(resp)
             if resp.status_code >= 400:
                 optic.debug("cli audit POST failed: status={}", resp.status_code)
         except Exception as e:

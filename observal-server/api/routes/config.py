@@ -23,7 +23,7 @@ from observal_shared.harness_registry import HARNESS_REGISTRY, get_harness_runti
 from schemas.sso_health import all_pass
 from services.oidc_health import run_oidc_checks
 from services.saml_health import run_saml_health_probe
-from version import get_server_version
+from version import get_build_commit, get_server_version
 
 router = APIRouter(prefix="/api/v1/config", tags=["config"])
 
@@ -46,6 +46,8 @@ async def get_version():
     server_ver = get_server_version()
     return {
         "server_version": server_ver,
+        # Lets the CLI build the exact source of a development server (see observal_cli/auto_sync.py).
+        "build_commit": get_build_commit(),
         "max_cli_version": max_cli or None,
         "api_version": api_version or None,
         "frontend_version": frontend_version or server_ver,

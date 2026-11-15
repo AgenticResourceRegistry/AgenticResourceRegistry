@@ -14,6 +14,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.api
+      args:
+        OBSERVAL_BUILD_COMMIT: ${OBSERVAL_BUILD_COMMIT:-}
     image: ghcr.io/agenticresourceregistry/observal-api:latest
     command: ["/app/entrypoint.sh"]
     env_file:
@@ -40,6 +42,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.api
+      args:
+        OBSERVAL_BUILD_COMMIT: ${OBSERVAL_BUILD_COMMIT:-}
     image: ghcr.io/agenticresourceregistry/observal-api:latest
     command:
       [
@@ -186,6 +190,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.api
+      args:
+        OBSERVAL_BUILD_COMMIT: ${OBSERVAL_BUILD_COMMIT:-}
     image: ghcr.io/agenticresourceregistry/observal-api:latest
     command:
       [

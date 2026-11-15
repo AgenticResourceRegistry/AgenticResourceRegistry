@@ -301,6 +301,205 @@ def _fetch_from_github(include_pre: bool = False) -> dict | None:
         return None
 
 
+# ── Locate development builds ───────────────────────────────────
+
+
+def _pyproject_version(ref: str) -> str | None:
+    """The CLI version declared at ``ref`` (a branch or commit) of the source repository."""
+    try:
+        resp = httpx.get(
+            f"https://raw.githubusercontent.com/{_github_repo()}/{ref}/pyproject.toml",
+            timeout=10,
+            headers={"User-Agent": f"observal-cli/{get_current_version()}"},
+        )
+        if resp.status_code != 200 or len(resp.content) > MAX_RESPONSE_SIZE:
+            return None
+        match = re.search(r'^version\s*=\s*"([^"]+)"', resp.text, re.M)
+        return match.group(1) if match else None
+    except httpx.HTTPError:
+        return None
+
+
+def _same_version(left: str | None, right: str) -> bool:
+    from packaging.version import InvalidVersion, Version
+
+    try:
+        return left is not None and Version(left) == Version(right)
+    except InvalidVersion:
+        return False
+
+
+SOURCE_CACHE = CONFIG_DIR / "cache" / "source.git"
+_COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
+_PUBLISHED_REFS = ("+refs/heads/main:refs/heads/main", "+refs/heads/release/*:refs/heads/release/*")
+
+
+def _git(*args: str, timeout: int = 60) -> subprocess.CompletedProcess | None:
+    """Run git against the local copy of the published history. None when git cannot run."""
+    environment = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_NO_LAZY_FETCH": "1"}
+    try:
+        return subprocess.run(
+            ["git", "--git-dir", str(SOURCE_CACHE), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=environment,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _source_url() -> str:
+    return f"https://github.com/{_github_repo()}"
+
+
+_published_history_fetched = False
+
+
+def _published_history() -> bool:
+    """Bring the local copy of `main` and `release/*` commit history up to date (commits only, no files).
+
+    A server names the commit to build. GitHub serves far more than the
+    published branches under the repository's address: the head of every open
+    pull request, and commits that exist only in forks. Only a commit reachable
+    from `main` or a release branch has been reviewed and merged, so nothing
+    else is ever built. False when the history cannot be read, and then nothing
+    is built either.
+    """
+    global _published_history_fetched
+    if _published_history_fetched:
+        return True
+    try:
+        if not (SOURCE_CACHE / "HEAD").is_file():
+            SOURCE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["git", "init", "--quiet", "--bare", str(SOURCE_CACHE)], capture_output=True, timeout=30, check=True
+            )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    result = _git(
+        "fetch", "--quiet", "--no-tags", "--prune", "--filter=tree:0", _source_url(), *_PUBLISHED_REFS, timeout=180
+    )
+    _published_history_fetched = result is not None and result.returncode == 0
+    return _published_history_fetched
+
+
+def is_published_commit(sha: str) -> bool:
+    """Whether ``sha`` is a full commit hash reachable from `main` or a `release/*` branch."""
+    if not _COMMIT_SHA.fullmatch(sha or "") or not _published_history():
+        return False
+    result = _git("for-each-ref", "--contains", sha, "--format=%(refname)", "refs/heads/")
+    return result is not None and result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _main_head() -> str | None:
+    """The commit `main` points at now, so a build never follows a branch that moves under it."""
+    if not _published_history():
+        return None
+    result = _git("rev-parse", "--verify", "refs/heads/main^{commit}")
+    head = result.stdout.strip() if result is not None and result.returncode == 0 else ""
+    return head if _COMMIT_SHA.fullmatch(head) else None
+
+
+def _commit_for_dev_version(target_version: str) -> str | None:
+    """A published commit on `main` whose source declares development version ``target_version``.
+
+    ``main`` keeps moving after a development server is deployed, and the next
+    version bump leaves that server behind. Walk the commits that changed
+    ``pyproject.toml``, newest first, to the first one that declares the target.
+
+    This reads GitHub's per-file commit feed, not the REST API: the API allows
+    60 anonymous requests an hour per address, which a shared office address
+    exhausts, and a sync that fails for that reason would defeat its purpose.
+    """
+    from packaging.version import InvalidVersion, Version
+
+    head = _main_head()
+    if head is None:
+        return None
+    if _same_version(_pyproject_version(head), target_version):
+        return head
+    try:
+        resp = httpx.get(
+            f"https://github.com/{_github_repo()}/commits/main/pyproject.toml.atom",
+            timeout=10,
+            headers={"User-Agent": f"observal-cli/{get_current_version()}"},
+        )
+        if resp.status_code != 200 or len(resp.content) > MAX_RESPONSE_SIZE:
+            return None
+        for sha in dict.fromkeys(re.findall(r"Commit/([0-9a-f]{40})", resp.text)):
+            declared = _pyproject_version(sha)
+            if declared is None:
+                return None
+            if _same_version(declared, target_version):
+                return sha if is_published_commit(sha) else None
+            if Version(declared) < Version(target_version):
+                return None
+    except (httpx.HTTPError, InvalidVersion):
+        return None
+    return None
+
+
+def git_install_command() -> str:
+    """How to install git on this platform."""
+    import platform
+
+    system = platform.system()
+    if system == "Windows":
+        return "winget install --id Git.Git -e"
+    if system == "Darwin":
+        return "xcode-select --install"
+    return "sudo apt install git (or your distribution's package manager)"
+
+
+def missing_git_reason(target_version: str) -> str | None:
+    """Why development version ``target_version`` cannot be built here, when the reason is that git is missing.
+
+    A development build exists only as source, and both finding its published
+    commit and building it need git. Checked first, so the user is told what to
+    install instead of a lookup failing for a reason they cannot see.
+    """
+    import shutil
+
+    from packaging.version import InvalidVersion, Version
+
+    try:
+        if not Version(target_version).is_devrelease:
+            return None
+    except InvalidVersion:
+        return None
+    if shutil.which("git"):
+        return None
+    return (
+        f"Version {target_version} is a development build, which is built from source and needs git. "
+        f"git is not installed or not on PATH. Install it with `{git_install_command()}`, open a new terminal, "
+        "and run the command again."
+    )
+
+
+def dev_source_refs(target_version: str, commit: str | None = None) -> list[str]:
+    """Published commits to build development version ``target_version`` from, best first.
+
+    ``commit`` is the build commit a server reports. It is used only when it is
+    published (see `_published_history`) and its source declares the target
+    version; otherwise the commit is located on `main`. Empty for releases, and
+    empty when no such commit can be confirmed: the caller then installs nothing.
+    """
+    from packaging.version import InvalidVersion, Version
+
+    try:
+        if not Version(target_version).is_devrelease:
+            return []
+    except InvalidVersion:
+        return []
+    if commit and is_published_commit(commit) and _same_version(_pyproject_version(commit), target_version):
+        return [commit]
+    located = _commit_for_dev_version(target_version)
+    return [located] if located else []
+
+
 # ── Fetch from GHCR (server image versions) ────────────────────
 
 
@@ -547,15 +746,14 @@ def check_version_compatibility(server_url: str) -> None:
     """Enforce exact CLI/server version match.
 
     The server version is the canonical target. CLI pings the server to
-    get its version, then requires an exact match. Shows the correct
-    upgrade or downgrade command based on which direction the mismatch is.
+    get its version, then requires an exact match. On a mismatch the CLI
+    syncs itself to the server's version and re-runs the command; only when
+    that fails does it show the upgrade or downgrade command and exit.
 
     Reads from the local version cache first (populated by auto-update check)
     to avoid a duplicate network call. Falls back to a fresh fetch if needed.
     """
-    import typer
     from packaging.version import InvalidVersion, Version
-    from rich import print as rprint
 
     cli_ver_str = get_current_version()
     if cli_ver_str == "0.0.0":
@@ -589,20 +787,24 @@ def check_version_compatibility(server_url: str) -> None:
     if cli_v == srv_v:
         return
 
-    from observal_cli.install_detector import upgrade_command
+    from observal_cli import auto_sync
+    from observal_cli.errors import ErrorCategory, fail
 
-    if cli_v > srv_v:
-        install_command = f"observal self downgrade --version {server_ver}"
-        rprint(
-            f"\n[bold red]\u2716 CLI version {cli_ver_str} is ahead of server {server_ver}.[/bold red]\n"
-            f"  Downgrade the CLI to match your server:\n\n"
-            f"    [cyan]{install_command}[/cyan]\n"
+    # Installs the server's version and re-runs this command; returns when it could not do both.
+    reason = auto_sync.sync_to_server(server_url)
+    if reason is None:
+        auto_sync.fail_synced_without_rerun(
+            server_ver, operation="Check CLI and server versions", resource=f"server {server_url}"
         )
-    else:
-        install_command = upgrade_command(server_ver)
-        rprint(
-            f"\n[bold red]\u2716 CLI version {cli_ver_str} is behind server {server_ver}.[/bold red]\n"
-            f"  Upgrade the CLI to match your server:\n\n"
-            f"    [cyan]{install_command}[/cyan]\n"
-        )
-    raise typer.Exit(1)
+
+    ahead = cli_v > srv_v
+    # The shared error contract, not a bare print: JSON mode gets one error
+    # object on stderr and exit code 10, like the login and 426 paths.
+    fail(
+        ErrorCategory.VERSION,
+        f"CLI version {cli_ver_str} is {'ahead of' if ahead else 'behind'} server {server_ver}. "
+        f"Automatic sync did not complete: {reason}",
+        operation="Check CLI and server versions",
+        resource=f"server {server_url}",
+        remediation=auto_sync.manual_fix(server_ver, cli_ver_str),
+    )

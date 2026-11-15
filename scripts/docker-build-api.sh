@@ -19,8 +19,14 @@ docker_cmd="${DOCKER:-docker}"
 
 cd "$(git rev-parse --show-toplevel)"
 rev="$(git stash create)"
-rev="${rev:-HEAD}"
+# A snapshot with local changes is no published commit: report none, so the CLI never builds
+# HEAD's clean source believing it is what this server runs.
+build_commit=""
+if [ -z "$rev" ]; then
+  rev=HEAD
+  build_commit="$(git rev-parse HEAD)"
+fi
 
 git archive --format=tar "$rev" \
   observal-server packages/observal-shared docker/entrypoint.sh docker/Dockerfile.api |
-  $docker_cmd build -f docker/Dockerfile.api -t "$tag" -
+  $docker_cmd build --build-arg OBSERVAL_BUILD_COMMIT="$build_commit" -f docker/Dockerfile.api -t "$tag" -

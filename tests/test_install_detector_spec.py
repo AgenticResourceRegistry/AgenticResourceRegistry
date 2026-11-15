@@ -3,7 +3,14 @@
 
 from pathlib import Path
 
-from observal_cli.install_detector import SOURCE_SPEC, InstallInfo, InstallMethod, install_spec, upgrade_command
+from observal_cli.install_detector import (
+    SOURCE_REPO,
+    SOURCE_SPEC,
+    InstallInfo,
+    InstallMethod,
+    install_spec,
+    upgrade_command,
+)
 
 
 def _info(method: InstallMethod) -> InstallInfo:
@@ -26,28 +33,37 @@ def test_dev_upgrade_command_never_pins_unpublished_package():
 def test_executor_installs_dev_build_from_source(monkeypatch):
     from unittest.mock import MagicMock
 
-    from observal_cli import upgrade_executor
+    from observal_cli import upgrade_executor, version_check
 
     run = MagicMock(return_value=MagicMock(returncode=0, stderr=""))
     monkeypatch.setattr(upgrade_executor.subprocess, "run", run)
+    commit = "a" * 40
+    monkeypatch.setattr(version_check, "dev_source_refs", lambda *_args: [commit])
     from contextlib import nullcontext
 
     upgrade_executor._install_via_uv("1.15.0.dev0", "upgrade", lambda _m: nullcontext())
 
-    assert run.call_args.args[0] == ["uv", "tool", "install", SOURCE_SPEC, "--force"]
+    # The published commit that declares the version, never the moving `main` branch.
+    assert run.call_args.args[0] == ["uv", "tool", "install", f"{SOURCE_REPO}@{commit}", "--force"]
 
 
-def test_426_remediation_uses_server_install_command():
+def test_426_remediation_is_the_clis_own_not_the_servers_install_command():
+    """A 426 body's install_command can name any commit, including an unmerged one the CLI refuses to build."""
     import httpx
     import pytest
 
     from observal_cli.client import _handle_error
     from observal_cli.errors import CliError
 
-    cmd = "uv tool install --force X"
+    unmerged = (
+        "uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@" + "c" * 40
+    )
     resp = httpx.Response(
-        426, json={"detail": "d", "install_command": cmd}, request=httpx.Request("GET", "http://x/api")
+        426,
+        json={"detail": "d", "server_version": "1.15.0-dev.0", "install_command": unmerged},
+        request=httpx.Request("GET", "http://x/api"),
     )
     with pytest.raises(CliError) as exc:
         _handle_error(httpx.HTTPStatusError("e", request=resp.request, response=resp), "/api")
-    assert cmd in exc.value.remediation
+    assert unmerged not in exc.value.remediation
+    assert "observal self" in exc.value.remediation and "1.15.0-dev.0" in exc.value.remediation
