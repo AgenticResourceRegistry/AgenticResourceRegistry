@@ -1,12 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+// SPDX-FileCopyrightText: 2026 Deepesh Kumar <akadeepesh1710@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+export interface ErrorBoundaryFallbackProps {
+  error: Error | null;
+  /** Clears the error so the children render again. */
+  reset: () => void;
+}
+
 interface Props {
   children: ReactNode;
+  /**
+   * Rendered instead of the full-page fallback when a child throws.
+   * Pass a function to get the error and a `reset` callback (e.g. for a Retry button).
+   */
+  fallback?: ReactNode | ((props: ErrorBoundaryFallbackProps) => ReactNode);
 }
 
 interface State {
@@ -25,8 +37,20 @@ export class ErrorBoundary extends Component<Props, State> {
     console.error("[ErrorBoundary]", error, info.componentStack);
   }
 
+  reset = () => {
+    this.setState({ hasError: false, error: null });
+  };
+
   render() {
     if (this.state.hasError) {
+      const { fallback } = this.props;
+      if (typeof fallback === "function") {
+        return fallback({ error: this.state.error, reset: this.reset });
+      }
+      if (fallback !== undefined) {
+        return fallback;
+      }
+
       return (
         <div className="flex min-h-dvh items-center justify-center bg-surface-sunken p-6">
           <div className="flex flex-col items-center gap-4 text-center">

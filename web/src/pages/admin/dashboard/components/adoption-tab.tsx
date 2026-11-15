@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Deepesh Kumar <akadeepesh1710@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -9,6 +10,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { useExecAdoption, useExecAgentCounts, useExecUsageByCategory, useExecPlatformCoverage } from "@/hooks/use-api";
 import { StatCard } from "./stat-card";
 import { DashboardRangeContext } from "../context";
+import { CardErrorBoundary } from "./card-error-boundary";
 
 export function AdoptionTab() {
   const range = useContext(DashboardRangeContext);
@@ -48,7 +50,9 @@ export function AdoptionTab() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <AdoptionChart monthly={adoption?.monthly ?? []} />
+        <CardErrorBoundary className="lg:col-span-2">
+          <AdoptionChart monthly={adoption?.monthly ?? []} />
+        </CardErrorBoundary>
 
 
         <div className="rounded-xl bg-card shadow-sm p-5">

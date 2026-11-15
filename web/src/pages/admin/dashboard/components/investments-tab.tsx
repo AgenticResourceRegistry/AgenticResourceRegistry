@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Deepesh Kumar <akadeepesh1710@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -12,6 +13,7 @@ import { useExecPlatforms, useExecStrategicInsights } from "@/hooks/use-api";
 import type { ExecPlatformScore } from "@/lib/types";
 
 import { CHART_SERIES } from "@/lib/chart-theme";
+import { CardErrorBoundary } from "./card-error-boundary";
 
 const COLORS = CHART_SERIES;
 
@@ -184,7 +186,9 @@ export function InvestmentsTab() {
           </tbody>
         </table>
       </div>
-      <ModelComparison />
+      <CardErrorBoundary>
+        <ModelComparison />
+      </CardErrorBoundary>
     </div>
   );
 }
