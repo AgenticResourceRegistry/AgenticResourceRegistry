@@ -10,14 +10,16 @@ server, for people and scripts. See ``observal_cli.delegation``.
 
 from __future__ import annotations
 
+import time
 from contextlib import nullcontext
 
 import typer
 from rich import print as rprint
+from rich.console import Console
 from rich.table import Table
 
 from observal_cli.constants import VALID_HARNESSES
-from observal_cli.delegation import service, tasks
+from observal_cli.delegation import progress, service, tasks
 from observal_cli.errors import ErrorCategory, fail
 from observal_cli.render import OutputMode, console, esc, output_json, spinner
 
@@ -32,6 +34,9 @@ delegate_app = typer.Typer(
     ),
     no_args_is_help=True,
 )
+
+# Followed output goes to stderr so --output json stays one JSON document on stdout.
+_events_console = Console(stderr=True)
 
 _STATE_STYLE = {
     tasks.STATE_COMPLETED: "green",
@@ -60,6 +65,11 @@ def _state(task: dict) -> str:
 
 
 def _show(task: dict, output: OutputMode) -> None:
+    """Print a task: its state, its artifacts, and -- while it runs -- its latest output.
+
+    JSON output stays the task document alone, so a caller parsing it is unaffected
+    by progress; the table is where a human watches a run that has not settled.
+    """
     if output == "json":
         output_json(task)
         return
@@ -70,6 +80,12 @@ def _show(task: dict, output: OutputMode) -> None:
     note = tasks.message_text((task.get("status") or {}).get("message"))
     if note:
         rprint(f"  {esc(note)}")
+    if not tasks.is_final(task):
+        recent = progress.recent(task["id"], limit=5)
+        if recent:
+            rprint("\n[bold]Progress[/bold] [dim](newest last, --follow to watch)[/dim]")
+            for event in recent:
+                rprint(f"  [dim]{esc(event.get('ts') or '')}[/dim] {esc(event.get('text') or '')}")
     for artifact in task.get("artifacts") or []:
         name = artifact.get("name") or "artifact"
         if name == "changes.patch":
@@ -78,6 +94,37 @@ def _show(task: dict, output: OutputMode) -> None:
             continue
         rprint(f"\n[bold]{esc(name)}[/bold]")
         console.print(tasks.message_text(artifact), markup=False, highlight=False)
+
+
+def _drain_events(task_id: str, seen: int, *, final: bool = False) -> int:
+    """Print every event after ``seen``, page by page, and return the new cursor.
+
+    ``final`` lifts the page budget: a settled task will not produce more output, so
+    stopping short would leave its last pages unprinted for good.
+    """
+    events, seen = progress.drain(task_id, seen, rounds=None if final else progress.DRAIN_ROUNDS)
+    for event in events:
+        _events_console.print(f"{event.get('ts')}  {event.get('text')}", markup=False, highlight=False, soft_wrap=True)
+    return seen
+
+
+def _print_progress(task: dict, seconds: float) -> dict:
+    """Print the child's output as it arrives, then return the settled task.
+
+    ``seconds`` is what is left of the caller's --wait budget, so following never
+    pushes the command past it. Whatever the child wrote between the last poll
+    and the task settling is printed before returning.
+    """
+    seen = 0
+    deadline = time.monotonic() + max(0.0, seconds)
+    while True:
+        final = tasks.is_final(task)
+        seen = _drain_events(task["id"], seen, final=final)
+        if final or time.monotonic() >= deadline:
+            break
+        task = _guard("Show delegated task", service.wait, task["id"], 1)
+    _drain_events(task["id"], seen, final=tasks.is_final(task))
+    return task
 
 
 @delegate_app.command("find")
@@ -118,6 +165,7 @@ def delegate_run(
         None, "--harness", "-i", help="Harness to run a registry agent in (default: the harness you call from)"
     ),
     wait: int = typer.Option(600, "--wait", "-w", min=0, max=1800, help="Seconds to wait before returning"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Print the agent's output as it arrives (to stderr)"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ):
     """Delegate a task and wait for the result.
@@ -127,8 +175,13 @@ def delegate_run(
     call from; when that harness cannot run it, pass --harness to choose another. A remote A2A agent is
     called directly with its approved Agent Card.
 
+    With --follow, the agent's output is printed as it arrives, and --wait still
+    bounds the whole command. Progress goes to stderr, so --output json stays
+    parseable.
+
     Examples:
       observal delegate run acme/security-reviewer "Review the diff on this branch for auth bugs"
+      observal delegate run acme/security-reviewer "Review the diff" --follow
       observal delegate run urn:air:agents.acme.com:a2a:triage "Summarize incident INC-42" --wait 0 --output json
     """
     if harness and harness not in VALID_HARNESSES:
@@ -139,7 +192,8 @@ def delegate_run(
             resource="harness",
             remediation=f"Choose one of: {', '.join(VALID_HARNESSES)}.",
         )
-    with nullcontext() if output == "json" else spinner("Delegating..."):
+    started = time.monotonic()
+    with nullcontext() if output == "json" or follow else spinner("Delegating..."):
         task = _guard(
             "Delegate to agent",
             service.start,
@@ -147,8 +201,12 @@ def delegate_run(
             message,
             harness=harness,
             parent_harness=service.caller_harness(),
-            wait_seconds=wait,
+            # Followed runs do the waiting here, so output is printed while it arrives.
+            wait_seconds=0 if follow else wait,
         )
+    if follow:
+        # --wait bounds the whole command, so start-up time counts against it.
+        task = _print_progress(task, wait - (time.monotonic() - started))
     _show(task, output)
 
 
@@ -159,6 +217,9 @@ def delegate_status(
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ):
     """Show a delegated task, optionally waiting for it to finish.
+
+    While the task is still running the table ends with its latest output, so a
+    check-in shows progress without attaching to the run with --follow.
 
     Examples:
       observal delegate status 0b6f... --wait 120 --output json
