@@ -44,6 +44,7 @@ insights_app = typer.Typer(
 _REPORT_PAGE_SIZE = 100
 _ERROR_RATE_WARNING_THRESHOLD = 0.01
 _ERROR_RATE_CRITICAL_THRESHOLD = 0.1
+_MAX_COMPONENT_REPORT_DAYS = 90
 _registry_name_cache: str | None = None
 
 
@@ -1399,10 +1400,10 @@ def insights_generate(
             "--compare applies to Agent reports only.",
             operation="Generate component insight report",
         )
-    if component and period_days > 90:
+    if component and period_days > _MAX_COMPONENT_REPORT_DAYS:
         fail(
             ErrorCategory.VALIDATION,
-            "Component reports support at most 90 days.",
+            f"Component reports support at most {_MAX_COMPONENT_REPORT_DAYS} days.",
             operation="Generate component insight report",
         )
     component_version = agent_version if component else None
