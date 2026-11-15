@@ -772,7 +772,7 @@ async def test_generated_password_reset_orders_commit_gate_and_exact_security_ev
 
     async def execute(statement):
         order.append("lookup")
-        _assert_statement(statement, select(User).where(User.id == TARGET_ID, live_users()))
+        _assert_statement(statement, select(User).where(User.id == TARGET_ID, live_users()).with_for_update())
         return _one(target)
 
     async def generate(session):
@@ -1013,7 +1013,8 @@ async def test_delete_user_scrubs_shell_commits_then_revokes_and_records_event(m
     monkeypatch.setattr(users, "revoke_deleted_user_tokens", AsyncMock(side_effect=revoke))
     database.commit.side_effect = commit
 
-    assert await users.delete_user(TARGET_ID, database, _actor()) is None
+    actor_role = UserRole.super_admin if target_role is UserRole.super_admin else UserRole.admin
+    assert await users.delete_user(TARGET_ID, database, _actor(actor_role)) is None
 
     # The row is never deleted: everything referencing this ID keeps resolving.
     database.delete.assert_not_awaited()
@@ -1077,7 +1078,7 @@ async def test_delete_user_self_missing_already_deleted_and_last_admin_guards_ar
     last = _shell_target(role=UserRole.super_admin)
     last_db = _db(_one(last), _Result(values=[TARGET_ID]))
     with pytest.raises(HTTPException) as last_error:
-        await users.delete_user(TARGET_ID, last_db, _actor())
+        await users.delete_user(TARGET_ID, last_db, _actor(UserRole.super_admin))
     assert (last_error.value.status_code, last_error.value.detail) == (400, "Cannot delete the last admin")
     last_db.commit.assert_not_awaited()
     assert last.deleted_at is None and last.email == "member@example.test"
@@ -1181,3 +1182,61 @@ async def test_reset_password_revocation_failure_aborts_before_commit(monkeypatc
 
     database.commit.assert_not_awaited()
     emit.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("actor_role", "target_role", "allowed"),
+    [
+        (UserRole.admin, UserRole.super_admin, False),
+        (UserRole.admin, UserRole.admin, True),
+        (UserRole.admin, UserRole.reviewer, True),
+        (UserRole.admin, UserRole.user, True),
+        (UserRole.super_admin, UserRole.super_admin, True),
+        (UserRole.super_admin, UserRole.admin, True),
+        ("unknown", UserRole.user, False),
+        (UserRole.admin, "unknown", False),
+    ],
+)
+def test_manageable_user_preserves_role_boundary(actor_role, target_role, allowed):
+    if allowed:
+        users._require_manageable_user(_actor(actor_role), _target(role=target_role))
+    else:
+        with pytest.raises(HTTPException) as error:
+            users._require_manageable_user(_actor(actor_role), _target(role=target_role))
+        assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["generated_reset", "supplied_reset", "delete", "demote"])
+async def test_admin_cannot_mutate_higher_role_account(operation, monkeypatch):
+    target = _target(role=UserRole.super_admin)
+    database = _db(_one(target))
+    event = AsyncMock()
+    generate = AsyncMock()
+    delete = AsyncMock()
+    redis = SimpleNamespace(eval=AsyncMock(), setex=AsyncMock())
+    monkeypatch.setattr(users, "emit_security_event", event)
+    monkeypatch.setattr(users, "_generate_unique_password", generate)
+    monkeypatch.setattr(users, "delete_user_account", delete)
+    monkeypatch.setattr("services.redis.get_redis", lambda: redis)
+    with pytest.raises(HTTPException) as error:
+        if operation == "delete":
+            await users.delete_user(TARGET_ID, database, _actor())
+        elif operation == "demote":
+            await users.update_user_role(TARGET_ID, UserRoleUpdate(role="user"), database, _actor())
+        else:
+            request = (
+                AdminResetPasswordRequest(generate=True)
+                if operation == "generated_reset"
+                else AdminResetPasswordRequest(new_password="Chosen2!")
+            )
+            await users.reset_user_password(TARGET_ID, request, database, _actor())
+    assert error.value.status_code == 403
+    assert target.role is UserRole.super_admin
+    target.set_password.assert_not_called()
+    generate.assert_not_awaited()
+    delete.assert_not_awaited()
+    redis.eval.assert_not_awaited()
+    redis.setex.assert_not_awaited()
+    event.assert_not_awaited()
+    _assert_no_write(database)

@@ -35,6 +35,16 @@ from .helpers import _generate_unique_password
 # ── User Management ──────────────────────────────────────
 
 
+def _require_manageable_user(actor: User, target: User) -> None:
+    """Admins may manage peer/lower-role accounts, never higher-role accounts."""
+    if (
+        actor.role not in ROLE_HIERARCHY
+        or target.role not in ROLE_HIERARCHY
+        or ROLE_HIERARCHY[target.role] < ROLE_HIERARCHY[actor.role]
+    ):
+        raise HTTPException(status_code=403, detail="Cannot manage a user with a higher role than your own")
+
+
 @router.get("/users", response_model=list[UserAdminResponse])
 async def list_users(
     db: AsyncSession = Depends(get_db),
@@ -132,6 +142,7 @@ async def update_user_role(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    _require_manageable_user(current_user, user)
     old_role = user.role.value
     user.role = new_role
     await db.commit()
@@ -223,11 +234,12 @@ async def reset_user_password(
     a secure random password that doesn't collide with existing hashes.
     """
     optic.trace("user_id={}", user_id)
-    stmt = select(User).where(User.id == user_id, live_users())
+    stmt = select(User).where(User.id == user_id, live_users()).with_for_update()
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    _require_manageable_user(current_user, user)
 
     if req.generate:
         new_password = await _generate_unique_password(db)
@@ -292,6 +304,7 @@ async def delete_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    _require_manageable_user(current_user, user)
 
     deleted_user_email = user.email
     deleted_user_id = str(user.id)
