@@ -3,7 +3,7 @@
 
 services:
   observal-prometheus:
-    image: prom/prometheus:v3.12.0
+    image: prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac
     ports:
       - "127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"
     volumes:
@@ -23,7 +23,7 @@ services:
 
   observal-grafana:
     profiles: ["grafana"]
-    image: grafana/grafana-oss:13.0.2
+    image: grafana/grafana-oss:13.0.2@sha256:5dad0df181cb644a14e13617b913b261a54f7d4fd4510721dba420929f35bea2
     ports:
       - "127.0.0.1:${GRAFANA_HOST_PORT:-3001}:3000"
     environment:
