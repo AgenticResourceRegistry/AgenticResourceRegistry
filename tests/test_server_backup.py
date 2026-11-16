@@ -39,6 +39,14 @@ class TestListBackups:
         assert results[0]["has_ch"] is True
         assert results[1]["has_ch"] is False
 
+    def test_orders_by_creation_timestamp_across_version_changes(self, isolated_backups):
+        older = isolated_backups / "v1.9.0-20261001T120000"
+        newer = isolated_backups / "v1.10.0-20261002T120000"
+        for path in (older, newer):
+            path.mkdir(parents=True)
+
+        assert [item["name"] for item in backup.list_backups()] == [newer.name, older.name]
+
 
 class TestPruneBackups:
     def test_prune_beyond_retention(self, isolated_backups):
@@ -52,6 +60,17 @@ class TestPruneBackups:
         assert len(pruned) == 2
         remaining = backup.list_backups()
         assert len(remaining) == 3
+
+    def test_retains_newest_by_timestamp_across_version_changes(self, isolated_backups):
+        older = isolated_backups / "v1.10.0-20261001T120000"
+        newer = isolated_backups / "v1.9.0-20261002T120000"
+        for path in (older, newer):
+            path.mkdir(parents=True)
+
+        pruned = backup.prune_backups(retention=1)
+
+        assert pruned == [older]
+        assert [item["name"] for item in backup.list_backups()] == [newer.name]
 
     def test_no_prune_under_retention(self, isolated_backups):
         for i in range(2):

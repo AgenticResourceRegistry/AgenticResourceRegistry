@@ -150,6 +150,14 @@ def restore_backup(backup_path: Path, compose_dir: Path) -> None:
     rprint("[dim]  PostgreSQL restored.[/dim]")
 
 
+def _backup_sort_key(path: Path) -> tuple[datetime, str]:
+    try:
+        created_at = datetime.strptime(path.name.rsplit("-", 1)[1], "%Y%m%dT%H%M%S")
+    except (IndexError, ValueError):
+        created_at = datetime.min
+    return created_at, path.name
+
+
 def prune_backups(retention: int = DEFAULT_RETENTION) -> list[Path]:
     """Remove old backups beyond retention count.
 
@@ -158,7 +166,7 @@ def prune_backups(retention: int = DEFAULT_RETENTION) -> list[Path]:
     if not BACKUPS_DIR.exists():
         return []
 
-    backups = sorted(BACKUPS_DIR.iterdir(), key=lambda p: p.name, reverse=True)
+    backups = sorted(BACKUPS_DIR.iterdir(), key=_backup_sort_key, reverse=True)
     if len(backups) <= retention:
         return []
 
@@ -177,7 +185,7 @@ def list_backups() -> list[dict]:
         return []
 
     results = []
-    for path in sorted(BACKUPS_DIR.iterdir(), key=lambda p: p.name, reverse=True):
+    for path in sorted(BACKUPS_DIR.iterdir(), key=_backup_sort_key, reverse=True):
         if not path.is_dir():
             continue
         pg_dump = path / "pg.dump"

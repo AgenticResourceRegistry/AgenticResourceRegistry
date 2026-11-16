@@ -457,10 +457,12 @@ def test_health_url_targets_an_api_route_behind_the_load_balancer(tmp_path: Path
 
 def test_rollback_is_confined_and_reports_clickhouse_unchanged(isolated, monkeypatch: pytest.MonkeyPatch) -> None:
     compose = prepare_compose(isolated, monkeypatch, "2.0.0")
-    backup = isolated.root / "config/backups/v1.5.0-20260101T120000"
-    backup.mkdir(parents=True)
-    (backup / "pg.dump").write_bytes(b"backup")
-    monkeypatch.setattr(isolated.backup, "list_backups", MagicMock(return_value=[{"path": str(backup)}]))
+    backup_root = isolated.root / "config/backups"
+    older_backup = backup_root / "v1.10.0-20260101T120000"
+    newer_backup = backup_root / "v1.9.0-20260102T120000"
+    for backup in (older_backup, newer_backup):
+        backup.mkdir(parents=True)
+        (backup / "pg.dump").write_bytes(b"backup")
     restore = MagicMock()
     monkeypatch.setattr(isolated.backup, "restore_backup", restore)
     monkeypatch.setattr(isolated.upgrade_lock, "acquire_lock", MagicMock(return_value="lock"))
@@ -474,8 +476,8 @@ def test_rollback_is_confined_and_reports_clickhouse_unchanged(isolated, monkeyp
 
     assert result["postgres_restored"] is True
     assert result["clickhouse_restored"] is False
-    restore.assert_called_once_with(backup, compose)
-    assert (compose / ".env").read_text() == "OBSERVAL_VERSION=1.5.0\n"
+    restore.assert_called_once_with(newer_backup, compose)
+    assert (compose / ".env").read_text() == "OBSERVAL_VERSION=1.9.0\n"
     assert [call.args[0] for call in run.call_args_list] == [
         ["docker", "compose", "up", "-d"],
         ["docker", "compose", "restart", "observal-lb"],
