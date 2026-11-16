@@ -15,7 +15,6 @@ from unittest.mock import Mock, call
 import pytest
 import typer
 import yaml
-from click import Group
 from typer.main import get_command
 from typer.testing import CliRunner
 
@@ -1354,7 +1353,7 @@ def test_every_agent_leaf_has_shared_output_option():
 
     def leaves(group):
         for child in group.commands.values():
-            if isinstance(child, Group):
+            if isinstance(getattr(child, "commands", None), dict):
                 yield from leaves(child)
             else:
                 yield child

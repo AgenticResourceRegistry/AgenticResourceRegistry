@@ -43,6 +43,7 @@ All notable changes to this project will be documented in this file.
 ### Fixes
 
 - cap Typer below 0.29, which makes every `observal` command fail when the package is installed with a fresh dependency resolution (`uv tool install`, `pipx`)
+- support Typer 0.26 through 0.29: declining a confirmation prints `Aborted!` again instead of an unexpected error, `CliError` keeps its contract exit code outside the root command group, and Typer 0.29 no longer crashes the JSON-mode check, so the Typer cap moves to below 0.30
 - accept Kiro universal array hooks across doctor, scan, inventory, and agent profile rewrites; preserve user hooks and skip unreadable profiles (#2015, #2024)
 - install and refresh array-based Kiro registry hook files without duplicating named entries or replacing unrelated hooks (#2020)
 - detect Kiro V3 reasoning models and durably upload companion model metadata as a fallback without changing source counts (#2023)

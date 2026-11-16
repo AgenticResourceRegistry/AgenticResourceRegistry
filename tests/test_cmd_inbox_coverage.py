@@ -12,6 +12,7 @@ from unittest.mock import Mock, call
 
 import pytest
 import typer
+from click.utils import strip_ansi
 from typer.main import get_command
 from typer.testing import CliRunner
 
@@ -228,17 +229,19 @@ def test_invalid_filters_fail_locally_with_exact_guidance(cli, state, kind, mess
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [
-        (["list", f"{LONG_OPTION}page", "0"], "0 is not in the range x>=1"),
-        (["list", f"{LONG_OPTION}page-size", "0"], "0 is not in the range 1<=x<=100"),
-        (["list", f"{LONG_OPTION}page-size", "101"], "101 is not in the range 1<=x<=100"),
-        (["show"], "Missing argument 'ITEM_ID'"),
+        (["list", f"{LONG_OPTION}page", "0"], "Invalid value for '--page'"),
+        (["list", f"{LONG_OPTION}page-size", "0"], "Invalid value for '--page-size'"),
+        (["list", f"{LONG_OPTION}page-size", "101"], "Invalid value for '--page-size'"),
+        (["show"], "Missing argument 'item_id'"),
     ],
 )
 def test_typer_validation_stops_before_http(cli, arguments, message):
     result = runner.invoke(inbox.inbox_app, arguments)
 
     assert result.exit_code == 2
-    assert message in result.output
+    # Typer rewords its range and metavar messages between releases, and colors the
+    # output under GITHUB_ACTIONS; match the stable part of the plain text.
+    assert message.lower() in strip_ansi(result.output).lower()
     cli.get.assert_not_called()
     cli.post.assert_not_called()
     cli.confirm.assert_not_called()

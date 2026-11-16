@@ -14,7 +14,6 @@ from types import SimpleNamespace
 
 import pytest
 import typer
-from click import Group
 from rich.console import Console
 from typer.main import get_command
 from typer.testing import CliRunner
@@ -1446,7 +1445,7 @@ def test_every_remaining_ops_workflow_has_output_and_dead_commands_are_removed()
 
     def leaves(group):
         for name, child in group.commands.items():
-            if isinstance(child, Group) and child.commands:
+            if isinstance(getattr(child, "commands", None), dict) and child.commands:
                 yield from leaves(child)
             else:
                 yield name, child
@@ -1591,7 +1590,7 @@ def test_every_admin_workflow_has_output_contract():
 
     def leaves(group):
         for name, child in group.commands.items():
-            if isinstance(child, Group) and child.commands:
+            if isinstance(getattr(child, "commands", None), dict) and child.commands:
                 yield from leaves(child)
             else:
                 yield name, child
