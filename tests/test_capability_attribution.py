@@ -3,6 +3,7 @@
 
 """Which session a recorded capability use belongs to."""
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -132,3 +133,42 @@ def test_linux_transcript_without_a_first_line_timestamp_still_gets_its_install(
     _record(lock.MODE_NEXT_SESSION, T0)  # installed at 12:00, one hour earlier
     used = sessions_base._capabilities_for_session("next", CWD, "claude-code", transcript)
     assert [(u["component_id"], u["mode"], u["confidence"]) for u in used] == [("c-1", "next-session", "window")]
+
+
+@pytest.mark.parametrize(
+    "bad_record",
+    [
+        '{"ts":',
+        "[" * 1500 + "0" + "]" * 1500,
+        json.dumps({"ts": "invalid", "kind": "mcp"}),
+        json.dumps({"ts": 123, "kind": "mcp"}),
+        json.dumps({"ts": T0.isoformat(), "kind": ["mcp"]}),
+        json.dumps({"ts": T0.isoformat(), "kind": "mcp", "extra": []}),
+        json.dumps({"ts": T0.isoformat(), "kind": "mcp", "extra": "bad"}),
+        json.dumps({"ts": T0.isoformat(), "kind": "mcp", "identifier": {}}),
+        json.dumps({"ts": T0.isoformat(), "kind": "mcp", "cwd": []}),
+    ],
+)
+def test_malformed_lock_records_do_not_hide_valid_uses(paths, monkeypatch, bad_record):
+    monkeypatch.delenv("OBSERVAL_SESSION_ID", raising=False)
+    path, _ = paths
+    _record(lock.MODE_CONTEXT, T0, component="before")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(bad_record + "\n")
+    _record(lock.MODE_CONTEXT, T0 + timedelta(minutes=1), component="after")
+
+    assert [use.component_id for use in lock.read_all()] == ["before", "after"]
+    assert [use.component_id for use in lock.matching(harness="claude-code", cwd=CWD, since=T0)] == ["before", "after"]
+    assert _for("session", T0) == [("before", "context", "window"), ("after", "context", "window")]
+    assert lock.prune(now=T0 + timedelta(days=31)) == 2
+
+
+def test_capability_record_legacy_defaults_and_unknown_fields():
+    use = lock.CapabilityUse.from_json(
+        json.dumps({"ts": "2026-09-30T12:00:00", "kind": "skill", "extra": None, "future_field": 1})
+    )
+    assert use is not None
+    assert use.timestamp == T0
+    assert use.mode == lock.MODE_CONTEXT
+    assert use.source == "unknown"
+    assert use.extra == {"future_field": 1}
