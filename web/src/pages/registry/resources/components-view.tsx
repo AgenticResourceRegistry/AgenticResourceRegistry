@@ -108,8 +108,6 @@ function ComponentCatalogCard({
   return (
     <ResourceCard
       item={item}
-      glyph={registryType}
-      labelled
       className={className}
       render={(p) =>
         canonical ? (
@@ -126,15 +124,13 @@ function ComponentCatalogCard({
 
 function ComponentListRow({
   item,
-  registryType,
   onClick,
 }: {
   item: RegistryItem;
-  registryType: RegistryType;
   onClick: () => void;
 }) {
   return (
-    <ResourceRow item={item} glyph={registryType} columns={LIST_COLUMNS} onClick={onClick}>
+    <ResourceRow item={item} columns={LIST_COLUMNS} onClick={onClick}>
       <span className={monoCell}>{(item.version as string | undefined) ?? "-"}</span>
       <span className="text-[10px] text-muted-foreground">{usageLabel(item) ?? "-"}</span>
       <StatusBadges item={item} />
@@ -430,7 +426,7 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
           headers={["Component", "Version", "Installs", "Status"]}
         >
           {visibleItems.map((item) => (
-            <ComponentListRow key={item.id} item={item} registryType={activeType} onClick={() => handleRowClick(item.id)} />
+            <ComponentListRow key={item.id} item={item} onClick={() => handleRowClick(item.id)} />
           ))}
         </ResourceList>
       )}
@@ -441,7 +437,6 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
             <SubmissionRow
               key={item.id}
               item={item}
-              glyph={activeType}
               actions={
                 <>
                   {(item.status === "draft" || item.status === "rejected" || item.status === "pending" || (activeType === "skills" && item.status === "approved")) && (
