@@ -14,7 +14,6 @@ import { CardSkeleton, TableSkeleton } from "@/components/shared/skeleton-layout
 import { StatusBadge } from "@/components/registry/status-badge";
 import { RecommendedBadge } from "@/components/registry/recommended-badge";
 import { ForkMarkers } from "@/components/registry/fork-provenance";
-import { EntityGlyph } from "@/components/registry/entity-glyph";
 import { RegistryName } from "@/components/registry/registry-name";
 import { RegistryToolbar, ViewToggle } from "@/components/registry/registry-primitives";
 import { useTeams } from "@/hooks/use-api";
@@ -160,15 +159,11 @@ type LinkRender = (p: { className: string; children: ReactNode }) => ReactElemen
 
 export function ResourceCard({
   item,
-  glyph,
-  labelled,
   render,
   className,
   children,
 }: {
   item: RegistryItem;
-  glyph: string;
-  labelled?: boolean;
   /** Renders the card's `<Link>`; the target differs for agents and components. */
   render: LinkRender;
   className?: string;
@@ -188,10 +183,9 @@ export function ResourceCard({
     children: (
       <>
         <div className="flex items-start justify-between gap-3">
-          <EntityGlyph type={glyph} size="sm" labelled={labelled} />
+          <div className="text-sm font-medium">{item.name}</div>
           <StatusBadges item={item} />
         </div>
-        <div className="mt-3 text-sm font-medium">{item.name}</div>
         <div className="mt-[3px] font-mono text-[10px] text-muted-foreground">
           {itemHandle(item)}
           {version ? ` · ${version}` : ""}
@@ -249,14 +243,12 @@ export function ResourceList({
 
 export function ResourceRow({
   item,
-  glyph,
   columns,
   subtitle,
   onClick,
   children,
 }: {
   item: RegistryItem;
-  glyph: string;
   columns: string;
   subtitle?: string;
   onClick: () => void;
@@ -275,7 +267,6 @@ export function ResourceRow({
       }}
     >
       <div className="flex items-center gap-[11px] min-w-0">
-        <EntityGlyph type={glyph} size="sm" labelled={false} />
         <div className="min-w-0">
           <strong className="block truncate text-xs font-medium">{item.name}</strong>
           <span className="block truncate mt-0.5 font-mono text-[9px] text-muted-foreground">
@@ -303,18 +294,15 @@ export function SubmissionsPanel({ title, children }: { title: ReactNode; childr
 
 export function SubmissionRow({
   item,
-  glyph,
   status,
   actions,
 }: {
   item: RegistryItem;
-  glyph: string;
   status?: string;
   actions: ReactNode;
 }) {
   return (
     <div className="flex items-center gap-4 py-3">
-      <EntityGlyph type={glyph} size="sm" labelled={false} />
       <div className="min-w-0 flex-1">
         <div className="flex items-start gap-2">
           <RegistryName item={item} nameClassName="text-xs font-medium" />

@@ -142,8 +142,6 @@ function AgentCatalogCard({ agent, className }: { agent: RegistryItem; className
   return (
     <ResourceCard
       item={agent}
-      glyph="agent"
-      labelled={false}
       className={className}
       render={(p) =>
         canonical ? (
@@ -185,7 +183,7 @@ function AgentListRow({ agent, onClick }: { agent: RegistryItem; onClick: () => 
     .join(" · ");
 
   return (
-    <ResourceRow item={agent} glyph="agent" columns={LIST_COLUMNS} subtitle={subtitle} onClick={onClick}>
+    <ResourceRow item={agent} columns={LIST_COLUMNS} subtitle={subtitle} onClick={onClick}>
       <StatusBadges item={agent} />
       <span className={monoCell}>{agent.download_count != null ? compactNumber(agent.download_count as number) : "-"}</span>
       <span className={monoCell}>
@@ -423,7 +421,6 @@ export default function AgentsView() {
             <SubmissionRow
               key={draft.id}
               item={draft}
-              glyph="agent"
               actions={
                 <>
                   <Button
@@ -477,7 +474,6 @@ export default function AgentsView() {
             <SubmissionRow
               key={agent.id}
               item={agent}
-              glyph="agent"
               status="deleted"
               actions={<RestoreDeletedAgentButton agent={agent} />}
             />
