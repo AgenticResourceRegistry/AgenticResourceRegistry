@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 // SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+// SPDX-FileCopyrightText: 2026 Deepesh Kumar <akadeepesh1710@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState, useCallback, useMemo, createElement } from "react";
@@ -15,6 +16,7 @@ import type {
 	SubagentSession,
 } from "@/lib/types";
 import { kindChipClasses, eventTextClass } from "@/lib/kind-colors";
+import { formatDuration } from "@/lib/format-duration";
 import {
 	FileText,
 	ChevronDown,
@@ -95,12 +97,6 @@ function Stat({
 			</span>
 		</div>
 	);
-}
-
-function formatDuration(ms: string | number): string {
-	const n = typeof ms === "string" ? parseFloat(ms) : ms;
-	if (n < 1000) return `${Math.round(n)}ms`;
-	return `${(n / 1000).toFixed(1)}s`;
 }
 
 function formatTokens(n: string | number): string {

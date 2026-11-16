@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Deepesh Kumar <akadeepesh1710@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -16,6 +17,7 @@ import { SearchField } from "@/components/ui/search-field";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAuditLog } from "@/hooks/use-api";
 import { admin } from "@/lib/api";
+import { formatDuration } from "@/lib/format-duration";
 import type { AuditLogEntry } from "@/lib/types";
 import { AdminMetric, AdminMetricStrip, AdminPanel, AdminTableFooter } from "./components/admin-surface";
 
@@ -119,7 +121,7 @@ function DetailRow({ entry }: { entry: AuditLogEntry }) {
         <TableCell>{outcomeBadge(entry.outcome)}</TableCell>
         <TableCell>{sensitivityBadge(entry.sensitivity)}</TableCell>
         <TableCell className="font-mono text-3xs text-muted-foreground">{entry.status_code}</TableCell>
-        <TableCell className="font-mono text-3xs text-muted-foreground">{entry.duration_ms > 0 ? `${entry.duration_ms.toFixed(0)}ms` : "—"}</TableCell>
+        <TableCell className="font-mono text-3xs text-muted-foreground">{entry.duration_ms > 0 ? formatDuration(entry.duration_ms) : "—"}</TableCell>
         <TableCell className="font-mono text-3xs text-muted-foreground">{entry.ip_address || "—"}</TableCell>
         <TableCell>
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setOpen(!open)} aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} details for ${entry.action}`}>

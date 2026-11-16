@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "e2e": "playwright test",
     "e2e:kiro": "playwright test --grep kiro",
     "e2e:ui": "playwright test --ui"
@@ -81,6 +82,7 @@
     "tailwindcss": "^4",
     "typescript": "^6.0.0",
     "typescript-eslint": "^8.72.0",
-    "vite": "^8.3.5"
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0"
   }
 }
