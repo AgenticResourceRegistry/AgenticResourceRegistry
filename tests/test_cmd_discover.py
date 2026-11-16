@@ -246,6 +246,74 @@ def test_use_mcp_points_at_install_command_and_records_nothing(monkeypatch):
     assert capability_lock.read_all() == []
 
 
+def _by_identifier(entries):
+    """A fake GET /ard/entries/{urn} that answers with the entry registered for that identifier."""
+    return Mock(side_effect=lambda path, **_k: entries[path.rsplit("/", 1)[-1]])
+
+
+def test_use_query_searches_and_loads_the_best_loadable_match(monkeypatch):
+    mcp = _result(
+        identifier=MCP_URN, displayName="GitHub", score=97, **{"obs:kind": "mcp", "obs:availability": "next-session"}
+    )
+    post = Mock(return_value={"results": [mcp, _result(score=90)]})
+    monkeypatch.setattr(discover.client, "post", post)
+    monkeypatch.setattr(discover.client, "get", _by_identifier({URN: _entry()}))
+    monkeypatch.setattr(discover.client, "get_text", Mock(return_value="# Security Review\nLook for auth bugs."))
+
+    result = _invoke("use", "--query", "review a pull request", "--output", "json")
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    # The higher-ranked MCP server only changes setup after a restart, so the skill that loads now wins.
+    assert data["identifier"] == URN and data["activated"] is True and data["content"].startswith("# Security")
+    assert data["selection"]["query"] == "review a pull request" and data["selection"]["score"] == 90
+    assert [a["identifier"] for a in data["selection"]["alternatives"]] == [MCP_URN]
+    body = post.call_args.args[1]
+    assert body["query"]["text"] == "review a pull request" and body["query"]["filter"]["obs:lifecycle"] == ["approved"]
+    assert [u.identifier for u in capability_lock.read_all()] == [URN]
+
+
+def test_use_query_falls_back_to_the_top_result_and_prints_its_install_command(monkeypatch):
+    mcp = _result(
+        identifier=MCP_URN,
+        displayName="GitHub",
+        **{"obs:kind": "mcp", "obs:nativeRef": "acme/github@1.4.2", "obs:availability": "next-session"},
+    )
+    monkeypatch.setattr(discover.client, "post", Mock(return_value={"results": [mcp]}))
+    entry = _entry(identifier=MCP_URN, **{"obs:kind": "mcp", "obs:nativeRef": "acme/github@1.4.2"})
+    monkeypatch.setattr(discover.client, "get", _by_identifier({MCP_URN: entry}))
+
+    data = json.loads(_invoke("use", "-q", "open a github issue", "--harness", "kiro", "--output", "json").output)
+
+    assert data["activated"] is False and data["next_step"].startswith("observal registry mcp install acme/github")
+    assert data["selection"]["alternatives"] == []
+
+
+def test_use_query_never_picks_a_remote_agent(monkeypatch):
+    a2a = _result(identifier="urn:air:agents.acme.com:a2a:triage", **{"obs:availability": "delegate"})
+    monkeypatch.setattr(discover.client, "post", Mock(return_value={"results": [a2a, _result(score=40)]}))
+    monkeypatch.setattr(discover.client, "get", _by_identifier({URN: _entry()}))
+    monkeypatch.setattr(discover.client, "get_text", Mock(return_value="# Security Review"))
+
+    data = json.loads(_invoke("use", "--query", "triage an incident", "--output", "json").output)
+
+    assert data["identifier"] == URN
+
+
+def test_use_query_with_no_match_is_not_found(monkeypatch):
+    monkeypatch.setattr(discover.client, "post", Mock(return_value={"results": []}))
+    result = _invoke("use", "--query", "something nobody built")
+    assert result.exit_code == 5
+    assert "Nothing approved in Observal matches" in result.output
+
+
+@pytest.mark.parametrize("args", [[], ["--query", "  "], [URN, "--query", "review a pull request"]])
+def test_use_needs_exactly_one_of_identifier_and_query(args):
+    result = _invoke("use", *args)
+    assert result.exit_code == 2
+    assert "either a resource identifier or --query" in result.output
+
+
 def test_next_step_quotes_registry_references_for_the_shell():
     hostile = {"obs:kind": "skill", "obs:nativeRef": "acme/x;touch pwned@1.0.0 $(id)"}
 
