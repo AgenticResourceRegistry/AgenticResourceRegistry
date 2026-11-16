@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: Apache-2.0
 name: observal
 command: observal
-description: "Use when starting any task the organization may already have an approved skill, prompt, MCP server, or Agent for: reviewing code, a commit, a diff, or a pull request; writing tests or documentation; querying a database, API, or service; automating a browser or web page; running untrusted code; connecting to a SaaS tool; drafting, researching, or any other substantive work. The user will not mention Observal: the task type is the trigger. Check what is already installed, then run observal discover search as the first action, before reading the repository or working from scratch. Also use when the user wants to log in, configure Observal, inspect local harness setup, share or open a repository Agent share, manage a teamspace or invitation, process inbox items, check installed registry items, or call an endpoint without a dedicated command."
-version: 2.11.0
+description: "Use when starting any non-trivial task, even one you already know how to do: the organization may already have an approved skill, prompt, MCP server, or Agent for it, and a vetted resource should be preferred over working from scratch. Triggers include reviewing code, a commit, or a pull request; writing tests or documentation; designing a feature or architecture; debugging; querying a database, API, or service; cloud work; automating a browser; running untrusted code; connecting to a SaaS tool; drafting or researching. The user will not mention Observal: the task type is the trigger. Check what is already installed, then run observal discover search as the first action, before reading the repository or working from scratch. Skip only for a trivial edit the user described precisely, or a direct factual question. Also use for logging in, configuring Observal, local harness setup, Agent shares, teamspaces, invitations, the inbox, installed registry items, or calling an endpoint without a dedicated command."
+version: 2.12.0
 owner: observal
 ---
 
@@ -20,7 +20,7 @@ Work through this before `git log`, before reading the repository, before planni
 
 1. **Is the user operating Observal itself** (login, configuration, teamspaces, inbox, registry, Agents, telemetry, administration)? Follow [Route the task](#route-the-task) below. Stop here.
 2. **Is the capability already present?** Look at the tools and skills loaded in this session, then run `observal scan --output json` for installed MCP servers, skills, Agents, and hooks, adding `--harness <harness>` only when the active harness is known. If it is present, use it. Never pull or install something that is already installed. Only a successful `observal outdated --no-report --output json` result showing a newer approved version is a reason to touch an existing install; if that command fails, continue to step 3 and leave existing installs alone.
-3. **Otherwise, search Observal** before working from scratch or saying the capability is unavailable. The user will not mention Observal; the task type is the trigger. Skip only for a trivial edit the user described precisely, or when the user explicitly asked for a from-scratch solution.
+3. **Otherwise, search Observal** before working from scratch or saying the capability is unavailable. The user will not mention Observal; the task type is the trigger. Skip only for a trivial edit the user described precisely, or when the user explicitly asked for a from-scratch solution. Do not skip the search because you already know how to do the task, and do not decide in advance that nothing relevant exists: searching is read-only and cheap, and an approved resource may be better than your default approach.
 
 ## Search Observal before reinventing
 
