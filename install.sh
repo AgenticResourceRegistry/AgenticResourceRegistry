@@ -160,10 +160,22 @@ fi
 # ── Install ──────────────────────────────────────────────────
 
 INSTALL_PATH="${BIN_DIR}/observal${EXT}"
+if [ ! -d "$BIN_DIR" ]; then
+    if [ -e "$BIN_DIR" ] || [ -L "$BIN_DIR" ]; then
+        die "Install path exists and is not a directory: $BIN_DIR"
+    fi
+    if ! mkdir -p "$BIN_DIR" 2>/dev/null; then
+        command -v sudo >/dev/null 2>&1 || die "Cannot create $BIN_DIR and sudo is not available"
+        info "Creating $BIN_DIR requires sudo"
+        sudo mkdir -p "$BIN_DIR" || die "Could not create install directory: $BIN_DIR"
+    fi
+fi
+
 if [ -w "$BIN_DIR" ]; then
     mv "$TMPDIR/$ARTIFACT" "$INSTALL_PATH"
     chmod +x "$INSTALL_PATH"
 else
+    command -v sudo >/dev/null 2>&1 || die "Installing to $BIN_DIR requires sudo, but sudo is not available"
     info "Installing to $BIN_DIR requires sudo"
     sudo mv "$TMPDIR/$ARTIFACT" "$INSTALL_PATH"
     sudo chmod +x "$INSTALL_PATH"
