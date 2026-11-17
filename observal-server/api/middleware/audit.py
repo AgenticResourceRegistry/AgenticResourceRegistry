@@ -19,6 +19,10 @@ from services.audit.classification import classify_route
 if TYPE_CHECKING:
     from starlette.requests import Request
 
+HTTP_REDIRECT_THRESHOLD = 300
+HTTP_NOT_FOUND = 404
+HTTP_SERVER_ERROR_THRESHOLD = 500
+
 
 class AuditMiddleware(BaseHTTPMiddleware):
     """Emit a loguru audit record for every non-skipped HTTP request."""
@@ -41,13 +45,13 @@ class AuditMiddleware(BaseHTTPMiddleware):
         user = getattr(request.state, "audit_user", None)
 
         status = response.status_code
-        if status < 300:
+        if status < HTTP_REDIRECT_THRESHOLD:
             outcome = "success"
         elif status in (401, 403):
             outcome = "denied"
-        elif status == 404:
+        elif status == HTTP_NOT_FOUND:
             outcome = "not_found"
-        elif status >= 500:
+        elif status >= HTTP_SERVER_ERROR_THRESHOLD:
             outcome = "error"
         else:
             outcome = "client_error"
