@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 // SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+// SPDX-FileCopyrightText: 2026 Sagar Kumar <sagar0206mahran@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState, useCallback, useMemo, createElement } from "react";
@@ -48,6 +49,7 @@ import { PageHeader } from "@/components/layouts/page-header";
 import { DetailSkeleton } from "@/components/shared/skeleton-layouts";
 import { ErrorState } from "@/components/shared/error-state";
 import { EmptyState } from "@/components/shared/empty-state";
+import { CopyTraceIdButton } from "@/components/traces/copy-trace-id-button";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1987,6 +1989,7 @@ const isRealTs = (ts: string | undefined): ts is string =>
 
 function SessionInfoTab({
 	events,
+	sessionId,
 	serviceName,
 	agentName,
 	agentId,
@@ -2040,6 +2043,13 @@ function SessionInfoTab({
 					Session Details
 				</h3>
 				<div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm bg-surface-sunken rounded-lg p-4">
+					<span className="text-muted-foreground">Trace ID</span>
+					<span className="flex min-w-0 items-center gap-1.5">
+						<span className="font-[family-name:var(--font-mono)] text-xs truncate">
+							{sessionId}
+						</span>
+						<CopyTraceIdButton traceId={sessionId} />
+					</span>
 					<span className="text-muted-foreground">Service</span>
 					<span>{serviceName || "unknown"}</span>
 					{(agentName || agentId) && (
@@ -2202,6 +2212,9 @@ export default function TraceDetailPage() {
 						})(),
 					},
 				]}
+				actionButtonsRight={
+					<CopyTraceIdButton traceId={id} className="h-8 w-8 [&_svg]:size-4" />
+				}
 			/>
 			<div className="page-body w-full mx-auto space-y-5">
 				{isLoading ? (
