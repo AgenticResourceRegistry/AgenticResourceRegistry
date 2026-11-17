@@ -436,6 +436,17 @@ def detect_destination_collisions(
 # ── Atomic installation ─────────────────────────────────────────────────────
 
 
+def file_mode_matches(actual: int, expected: int) -> bool:
+    """Whether an installed file's permission bits match the reviewed mode.
+
+    POSIX keeps the exact bits. Windows keeps only a read-only flag, so `0644` and `0755` both read back as
+    `0666` there: compare owner write access, the one bit that survives.
+    """
+    if os.name == "nt":
+        return bool(actual & stat.S_IWUSR) == bool(expected & stat.S_IWUSR)
+    return actual == expected
+
+
 def install_folder_bundle(
     bundle: ValidatedBundle,
     target_dir: Path,
@@ -498,7 +509,7 @@ def install_folder_bundle(
             if hashlib.sha256(staged_file.read_bytes()).hexdigest() != file.sha256:
                 raise BundleInstallError(f"Staged file content mismatch: {file.path}")
             actual_mode = stat.S_IMODE(staged_file.stat().st_mode)
-            if actual_mode != file.mode:
+            if not file_mode_matches(actual_mode, file.mode):
                 raise BundleInstallError(f"Staged file mode mismatch: {file.path}")
 
         # Handle existing target

@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
 
 from observal_cli import cmd_pull, lockfile, managed_skill
+from observal_cli.skill_folder import file_mode_matches
 
 
 def _bundle(version: str = "version-1", body: bytes = b"hello") -> dict:
@@ -98,7 +100,7 @@ def test_initial_agent_receipt_preserves_binary_mode_and_is_idempotent(machine: 
     outcome = managed_skill.transact(bundle, target, proof, record=record)
     assert outcome["action"] == "install"
     assert (target / "run.sh").read_bytes() == b"\x00\xff"
-    assert (target / "run.sh").stat().st_mode & 0o777 == 0o755
+    assert file_mode_matches((target / "run.sh").stat().st_mode & 0o777, 0o755)
     assert _plan(project, raw)[0][0][2] == proof
     assert managed_skill.transact(bundle, target, proof, record=record)["action"] == "unchanged"
     entry = lockfile.installed_agent("pi", "agent-1", scope="project", directory=str(project))
@@ -549,7 +551,12 @@ def test_config_overlap_and_symlinked_parent_fail_preflight(machine: Path, tmp_p
     assert not (project / ".pi/skills/demo/SKILL.md").exists()
     linked_project = tmp_path / "linked-project"
     linked_project.mkdir()
-    (linked_project / ".pi").symlink_to(tmp_path, target_is_directory=True)
+    if os.name == "nt":  # symlinks need Developer Mode there; a junction is the same redirect
+        import _winapi
+
+        _winapi.CreateJunction(str(tmp_path), str(linked_project / ".pi"))
+    else:
+        (linked_project / ".pi").symlink_to(tmp_path, target_is_directory=True)
     with pytest.raises(managed_skill.ManagedSkillError, match="Symlink"):
         _plan(linked_project, raw)
 

@@ -2253,7 +2253,7 @@ def _managed_agent_folders(
             if is_user_scope and raw_path.startswith(("~/", "~\\"))
             else target_dir / raw_path.removeprefix("~/")
         )
-        if any(part.is_symlink() for part in (lexical, *lexical.parents)):
+        if any(managed_skill.is_link(part) for part in (lexical, *lexical.parents)):
             raise managed_skill.ManagedSkillError("Symlink in Agent skill destination hierarchy")
         destination = _resolve_path(raw_path, target_dir, allow_home=is_user_scope)
         target = destination.parent.absolute()
@@ -3972,7 +3972,8 @@ def register_pull(app: typer.Typer):
                     f"Could not safely install pinned Agent skill folders before config writes: {error}",
                     operation="Pull agent",
                     resource="agent skills",
-                    remediation="Inspect the reported destination and retained backups; do not delete an unowned folder.",
+                    remediation=getattr(error, "remediation", None)
+                    or "Inspect the reported destination and retained backups; do not delete an unowned folder.",
                     detail=str(error),
                     result={"folder_recovery_errors": recovery, "installation_tracked": False},
                 )

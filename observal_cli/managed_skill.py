@@ -17,6 +17,7 @@ import os
 import shutil
 import stat
 import subprocess
+import time
 import uuid
 from contextlib import nullcontext
 from pathlib import Path
@@ -26,7 +27,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 from observal_cli import lockfile
-from observal_cli.skill_folder import ValidatedBundle, detect_destination_collisions, install_folder_bundle
+from observal_cli.skill_folder import (
+    ValidatedBundle,
+    detect_destination_collisions,
+    file_mode_matches,
+    install_folder_bundle,
+)
 
 
 class ManagedSkillError(RuntimeError):
@@ -52,10 +58,10 @@ class ManagedSkillCommittedError(ManagedSkillError):
 def _discard_stage(stage: Path) -> None:
     """Remove a first-install stage and the temporary directory install_folder_bundle keeps beside it."""
     for leftover in (stage, *stage.parent.glob(f".{glob.escape(stage.name)}.stage.*")):
-        if leftover.is_symlink():
+        if is_link(leftover):
             leftover.unlink()
         elif leftover.is_dir():
-            shutil.rmtree(leftover)
+            _rmtree(leftover)
 
 
 def receipt(
@@ -96,11 +102,11 @@ def verify_tree(target: Path, proof: dict) -> None:
     if not isinstance(proof, dict) or not isinstance(proof.get("files"), list):
         raise ManagedSkillError("Invalid folder receipt")
     expected = {f["path"]: f for f in proof["files"]}
-    if not target.is_dir() or target.is_symlink():
+    if not target.is_dir() or is_link(target):
         raise ManagedSkillError(f"Missing or symlinked managed folder: {target}")
     actual = set()
     for path in target.rglob("*"):
-        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+        if is_link(path) or not (path.is_file() or path.is_dir()):
             raise ManagedSkillError(f"Symlink or special file in managed folder: {path}")
         if path.is_dir():
             continue
@@ -110,7 +116,7 @@ def verify_tree(target: Path, proof: dict) -> None:
         if (
             record is None
             or path.stat().st_size != record["size"]
-            or stat.S_IMODE(path.stat().st_mode) != int(record["mode"], 8)
+            or not file_mode_matches(stat.S_IMODE(path.stat().st_mode), int(record["mode"], 8))
             or hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"]
         ):
             raise ManagedSkillError(
@@ -124,10 +130,124 @@ def verify_tree(target: Path, proof: dict) -> None:
         raise ManagedSkillError(f"Missing skill files: {sorted(expected.keys() - actual)}")
 
 
+_WINDOWS = os.name == "nt"
+# Reparse tags with this bit redirect a path elsewhere: symlinks and junctions. Cloud placeholders such as
+# OneDrive's do not set it and are ordinary directories here.
+_NAME_SURROGATE_TAG = 0x20000000
+# Seconds between attempts at a Windows rename or delete that another process (an antivirus scan, the search
+# indexer, an editor) briefly blocks. About three seconds in total before the command gives up.
+_WINDOWS_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.5, 0.75, 1.0)
+
+
+def is_link(path: Path) -> bool:
+    """A symlink, or on Windows also a junction or other name-surrogate reparse point."""
+    if not _WINDOWS:
+        return path.is_symlink()
+    try:
+        return path.is_symlink() or bool(getattr(os.lstat(path), "st_reparse_tag", 0) & _NAME_SURROGATE_TAG)
+    except OSError:
+        return False
+
+
 def _safe_parents(path: Path) -> None:
     for part in (path, *path.parents):
-        if part.is_symlink():
+        if is_link(part):
             raise ManagedSkillError(f"Symlink in destination or backup path: {part}")
+
+
+def _retry_on_windows(operation: Callable[[], object]) -> object:
+    """Run a filesystem operation, retrying while Windows reports the path busy."""
+    if not _WINDOWS:
+        return operation()
+    for delay in _WINDOWS_RETRY_DELAYS:
+        try:
+            return operation()
+        except PermissionError:
+            time.sleep(delay)
+    return operation()
+
+
+_LONG_PATH_REMEDIATION = (
+    "A path in the skill folder is longer than Windows allows (260 characters). Turn on long paths in Windows, "
+    "or install from a shorter project path or with a shorter --backup-root. Nothing was overwritten."
+)
+
+
+def _windows_path_too_long(exc: BaseException | None) -> bool:
+    """Whether a failure, or what caused it, is Windows refusing a path past MAX_PATH (206, or 3 for a directory)."""
+    while _WINDOWS and exc is not None:
+        if isinstance(exc, OSError) and getattr(exc, "winerror", None) in (3, 206):
+            return True
+        exc = exc.__cause__
+    return False
+
+
+def _busy_remediation(path: Path) -> str:
+    return (
+        f"Close any editor, terminal or harness that has files open under {path}, then run the command again. "
+        "Nothing was overwritten."
+    )
+
+
+def _rename_at(src_dir: Path, src_fd: int, src_name: str, dst_dir: Path, dst_fd: int, dst_name: str) -> None:
+    """Rename `src_name` in one pinned directory to `dst_name` in another.
+
+    POSIX renames relative to the pinned descriptors. Windows has no descriptor-relative rename, but the handles
+    from `_pin_dir` stop both directories and all of their ancestors from being renamed or deleted, so the paths
+    still lead to the pinned directories and a path rename is equivalent.
+    """
+    if not _WINDOWS:
+        os.rename(src_name, dst_name, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
+        return
+    try:
+        _retry_on_windows(lambda: os.rename(src_dir / src_name, dst_dir / dst_name))
+    except PermissionError as exc:
+        raise ManagedSkillError(
+            f"Windows kept {src_dir / src_name} in use, so it could not be moved: {exc}",
+            remediation=_busy_remediation(src_dir / src_name),
+        ) from exc
+
+
+def _rename_path(src: Path, dst: Path) -> None:
+    _retry_on_windows(lambda: src.rename(dst))
+
+
+def _rmtree(path: Path) -> None:
+    _retry_on_windows(lambda: shutil.rmtree(path))
+
+
+def _pin_dir_windows(path: Path) -> int:
+    """Hold a Windows handle on `path`, refusing a symlink or junction on any component.
+
+    Each component is opened in turn without following a final reparse point, compared with what `os.lstat` saw,
+    and kept open until the next one is open. The handle on `path` denies delete sharing, so while it is held
+    neither `path` nor any of its ancestors can be renamed, deleted or swapped for a link.
+    """
+    import _winapi
+    import msvcrt
+
+    access = 0x0001 | 0x0080 | 0x00100000  # FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE
+    share = 0x1 | 0x2  # FILE_SHARE_READ | FILE_SHARE_WRITE, never FILE_SHARE_DELETE
+    flags = 0x02000000 | 0x00200000  # FILE_FLAG_BACKUP_SEMANTICS (directories) | FILE_FLAG_OPEN_REPARSE_POINT
+    held: list[int] = []
+    try:
+        current = Path(path.anchor)
+        for part in ("", *path.parts[1:]):
+            current = current / part if part else current
+            seen = os.lstat(current)
+            if getattr(seen, "st_reparse_tag", 0) & _NAME_SURROGATE_TAG or not stat.S_ISDIR(seen.st_mode):
+                raise ManagedSkillError(f"Symlinked or missing directory in path: {path}")
+            handle = _winapi.CreateFile(str(current), access, share, 0, _winapi.OPEN_EXISTING, flags, 0)
+            held.append(msvcrt.open_osfhandle(handle, os.O_RDONLY))
+            opened = os.fstat(held[-1])
+            if (opened.st_dev, opened.st_ino) != (seen.st_dev, seen.st_ino) or not stat.S_ISDIR(opened.st_mode):
+                raise ManagedSkillError(f"Symlinked or missing directory in path: {path}")
+        return held.pop()
+    except OSError as exc:
+        raise ManagedSkillError(f"Symlinked, missing or busy directory in path: {path}") from exc
+    finally:
+        for fd in held:
+            os.close(fd)
 
 
 def _pin_dir(path: Path) -> int:
@@ -135,6 +255,8 @@ def _pin_dir(path: Path) -> int:
 
     O_NOFOLLOW on the final component alone lets a symlinked ancestor (say `.pi`) redirect an install elsewhere.
     """
+    if _WINDOWS:
+        return _pin_dir_windows(path)
     fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     try:
         for part in path.parts[1:]:
@@ -265,9 +387,24 @@ def _records(data: dict, target: Path) -> list[tuple[str, dict]]:
     return matches
 
 
-def _marker(root: Path, target: Path) -> list[Path]:
+def _slot_prefix(target: Path) -> str:
+    """The name prefix of every backup slot for `target`.
+
+    Windows paths stop at 260 characters unless long paths are enabled, and the staged skill files live
+    inside the slot, so slots there use a shorter name. No Windows slot predates this, so nothing older
+    needs the long form.
+    """
     key = hashlib.sha256(str(target).encode()).hexdigest()
-    return list(root.glob(f"{key}-*/marker.json"))
+    return key[:16] if _WINDOWS else key
+
+
+def _new_slot(root: Path, target: Path) -> Path:
+    unique = uuid.uuid4().hex
+    return root / f"{_slot_prefix(target)}-{unique[:12] if _WINDOWS else unique}"
+
+
+def _marker(root: Path, target: Path) -> list[Path]:
+    return list(root.glob(f"{_slot_prefix(target)}-*/marker.json"))
 
 
 def recover(target: Path, *, backup_root: Path | None = None, require_same_device: bool = True) -> None:
@@ -286,9 +423,9 @@ def recover(target: Path, *, backup_root: Path | None = None, require_same_devic
             ):
                 raise ManagedSkillError(f"Invalid recovery marker stage: {marker}")
             _discard_stage(stage)
-        if not target.exists() and not target.is_symlink() and backup.is_dir():
+        if not target.exists() and not is_link(target) and backup.is_dir():
             verify_tree(backup, state["old"])
-            backup.rename(target)
+            _rename_path(backup, target)
         if target.exists() and state.get("old"):
             try:
                 verify_tree(target, state["old"])
@@ -314,15 +451,15 @@ def recover(target: Path, *, backup_root: Path | None = None, require_same_devic
                             original.name != "old"
                             or original.parent.parent != root
                             or original.exists()
-                            or original.is_symlink()
+                            or is_link(original)
                         ):
                             raise ManagedSkillError(f"Restore backup slot changed; inspect {marker}")
                         # Return the verified older copy to its original backup
                         # slot instead of deleting the only recovery copy.
-                        target.rename(original)
+                        _rename_path(target, original)
                     else:
-                        shutil.rmtree(target)
-                    backup.rename(target)
+                        _rmtree(target)
+                    _rename_path(backup, target)
                     marker.unlink()
                     continue
                 if not (marker.parent / "backup.json").exists():
@@ -343,7 +480,7 @@ def recover(target: Path, *, backup_root: Path | None = None, require_same_devic
                 # for-byte complete new tree may be removed; changed files are
                 # left untouched for the user to inspect.
                 verify_tree(target, state["new"])
-                shutil.rmtree(target)
+                _rmtree(target)
                 marker.unlink()
             else:
                 raise ManagedSkillError(f"Interrupted initial install at {target}; inspect {marker} before retrying")
@@ -365,8 +502,6 @@ def transact(
     The Agent caller can use the same preflight and swap, but must coordinate
     its other writes and component receipt mutation separately.
     """
-    if os.name != "posix":
-        raise ManagedSkillError("Managed folder swaps require POSIX filesystem semantics")
     target = target.expanduser().absolute()
     if proof != receipt(
         bundle,
@@ -463,8 +598,8 @@ def transact(
             raise ManagedSkillError("Destination belongs to another registry or owner")
         previous = matches[0][1].get("folder_receipt") if matches else None
         missing_prior = None
-        if target.exists() or target.is_symlink():
-            if target.is_symlink():
+        if target.exists() or is_link(target):
+            if is_link(target):
                 raise ManagedSkillError("Symlink target cannot be managed")
             if previous is None:
                 if old_bundle is None or old_bundle.listing_id != bundle.listing_id:
@@ -561,7 +696,7 @@ def transact(
                 "modified": [path for path in common if before[path]["sha256"] != after[path]["sha256"]],
                 "mode_changed": [path for path in common if before[path]["mode"] != after[path]["mode"]],
             }
-        folder = root / f"{key}-{uuid.uuid4().hex}"
+        folder = _new_slot(root, target)
         # A first install renames nothing out of the way, so when the backup root is on another filesystem it
         # stages beside the destination (always the same filesystem) instead of failing.
         stage_beside = previous is None and not _same_device(root, target)
@@ -602,7 +737,8 @@ def transact(
                 payload["stage"] = str(stage)
             marker.write_text(json.dumps(payload))
             os.chmod(marker, 0o600)
-            with marker.open("rb") as handle:
+            # Windows flushes only a handle opened for writing.
+            with marker.open("r+b") as handle:
                 os.fsync(handle.fileno())
 
         def parent_stable() -> bool:
@@ -636,13 +772,13 @@ def transact(
                 )
             if previous:
                 verify_tree(target, previous)
-                os.rename(target.name, "old", src_dir_fd=parent_fd, dst_dir_fd=folder_fd)
+                _rename_at(target.parent, parent_fd, target.name, folder, folder_fd, "old")
                 # Another local writer may replace the path after the first
                 # verification. Never record a release if the folder actually
                 # moved into the backup differs from the reviewed old tree.
                 verify_tree(backup, previous)
             stage_dir_fd = stage_home_fd if stage_beside else folder_fd
-            os.rename(stage.name, target.name, src_dir_fd=stage_dir_fd, dst_dir_fd=parent_fd)
+            _rename_at(stage.parent, stage_dir_fd, stage.name, target.parent, parent_fd, target.name)
             if not parent_stable():
                 raise ManagedSkillError(f"Destination parent moved during swap; inspect recovery marker {marker}")
             if previous:
@@ -691,7 +827,7 @@ def transact(
         except Exception as exc:
             if isinstance(exc, ManagedSkillCommittedError):
                 raise
-            if marker.exists() and target.is_dir() and not target.is_symlink():
+            if marker.exists() and target.is_dir() and not is_link(target):
                 try:
                     observed = _records(lockfile.read_lockfile(), target)
                     if len(observed) == 1 and observed[0][1].get("folder_receipt") == proof:
@@ -720,11 +856,11 @@ def transact(
                     if target.exists():
                         verify_tree(target, proof)
                         require_stable()
-                        shutil.rmtree(target)
+                        _rmtree(target)
                     if parent_fd is not None and folder_fd is not None:
-                        os.rename("old", target.name, src_dir_fd=folder_fd, dst_dir_fd=parent_fd)
+                        _rename_at(folder, folder_fd, "old", target.parent, parent_fd, target.name)
                     else:
-                        backup.rename(target)
+                        _rename_path(backup, target)
                     marker.unlink(missing_ok=True)
                 except Exception as recovery_error:
                     raise ManagedSkillError(
@@ -734,23 +870,43 @@ def transact(
                 try:
                     verify_tree(target, proof)
                     require_stable()
-                    shutil.rmtree(target)
+                    _rmtree(target)
                     marker.unlink(missing_ok=True)
                 except Exception as recovery_error:
                     raise ManagedSkillError(
                         f"Initial install not recorded; inspect {target} and {folder}: {recovery_error}"
                     ) from exc
-            raise ManagedSkillError(f"Folder transaction failed; original installation preserved: {exc}") from exc
+            elif previous and target.is_dir() and not is_link(target):
+                # The old folder never moved (on Windows, typically because a program held a file in it open).
+                # Recovery would only verify it and drop the marker; do that now so the next run, including a
+                # preview, is not refused as an interrupted swap.
+                try:
+                    verify_tree(target, previous)
+                    marker.unlink(missing_ok=True)
+                except ManagedSkillError:
+                    pass  # leave the marker for the next run's recovery to inspect
+            raise ManagedSkillError(
+                f"Folder transaction failed; original installation preserved: {exc}",
+                remediation=_LONG_PATH_REMEDIATION
+                if _windows_path_too_long(exc)
+                else getattr(exc, "remediation", None),
+            ) from exc
         finally:
             # A redirected stage path may not be ours to delete, so only clean up what is still pinned.
             if stage_beside:
                 if stage_home_stable():
                     _discard_stage(stage)
             elif folder_stable() and stage.exists():
-                shutil.rmtree(stage)
+                _rmtree(stage)
             for fd in (folder_fd, parent_fd, stage_home_fd):
                 if fd is not None:
                     os.close(fd)
+            # A slot holds a backup or a recovery marker; one left empty by a failed attempt is just clutter.
+            try:
+                if folder.is_dir() and not is_link(folder) and next(folder.iterdir(), None) is None:
+                    folder.rmdir()
+            except OSError:
+                pass
 
 
 def backups_list(*, backup_root: Path | None = None) -> list[dict]:
@@ -760,7 +916,7 @@ def backups_list(*, backup_root: Path | None = None) -> list[dict]:
     _safe_parents(root)
     result = []
     for folder in root.iterdir():
-        if not folder.is_dir() or folder.is_symlink():
+        if not folder.is_dir() or is_link(folder):
             continue
         marker = folder / "marker.json"
         backup = folder / "old"
@@ -784,7 +940,7 @@ def restore_backup(backup_id: str, *, backup_root: Path | None = None, prune: bo
     if not backup_id or not all(c in "0123456789abcdef-" for c in backup_id):
         raise ManagedSkillError("Invalid backup ID")
     folder = root / backup_id
-    if folder.is_symlink() or not (folder / "backup.json").is_file():
+    if is_link(folder) or not (folder / "backup.json").is_file():
         raise ManagedSkillError("Unknown or unfinished backup")
     state = json.loads((folder / "backup.json").read_text())
     target = Path(state["target"])
@@ -797,10 +953,10 @@ def restore_backup(backup_id: str, *, backup_root: Path | None = None, prune: bo
         if len(matches) != 1 or matches[0][1].get("folder_receipt") != state["new"]:
             raise ManagedSkillError("Active lock receipt changed; refusing backup operation")
         if prune:
-            shutil.rmtree(folder)
+            _rmtree(folder)
             return {"pruned": backup_id}
         # Restoring consumes the old backup. Retain the current release as a new backup.
-        replacement = root / f"{key}-{uuid.uuid4().hex}"
+        replacement = _new_slot(root, target)
         replacement.mkdir(mode=0o700)
         pins: list[tuple[Path, int]] = []
         try:
@@ -833,8 +989,8 @@ def restore_backup(backup_id: str, *, backup_root: Path | None = None, prune: bo
             os.chmod(replacement / "marker.json", 0o600)
             committed = False
             try:
-                os.rename(target.name, "old", src_dir_fd=parent_fd, dst_dir_fd=replacement_fd)
-                os.rename("old", target.name, src_dir_fd=folder_fd, dst_dir_fd=parent_fd)
+                _rename_at(target.parent, parent_fd, target.name, replacement, replacement_fd, "old")
+                _rename_at(folder, folder_fd, "old", target.parent, parent_fd, target.name)
 
                 def update(data: dict) -> None:
                     records = _records(data, target)
@@ -869,7 +1025,10 @@ def restore_backup(backup_id: str, *, backup_root: Path | None = None, prune: bo
                 committed = True
                 (replacement / "marker.json").unlink()
                 if stable():  # never rmtree through a substituted ancestor
-                    shutil.rmtree(folder)
+                    # Windows cannot delete a directory this process still holds open, so release only that pin;
+                    # the replacement pin still holds the backup root in place.
+                    os.close(pins.pop([path for path, _fd in pins].index(folder))[1])
+                    _rmtree(folder)
                 return {"restored": backup_id, "current_backup": replacement.name}
             except Exception as exc:
                 if committed:
@@ -901,9 +1060,9 @@ def restore_backup(backup_id: str, *, backup_root: Path | None = None, prune: bo
                         verify_tree(current, state["new"])
                         if target.exists():
                             verify_tree(target, state["old"])
-                            os.rename(target.name, "old", src_dir_fd=parent_fd, dst_dir_fd=folder_fd)
+                            _rename_at(target.parent, parent_fd, target.name, folder, folder_fd, "old")
                         if not target.exists():
-                            os.rename("old", target.name, src_dir_fd=replacement_fd, dst_dir_fd=parent_fd)
+                            _rename_at(replacement, replacement_fd, "old", target.parent, parent_fd, target.name)
                         (replacement / "marker.json").unlink(missing_ok=True)
                 except (OSError, ManagedSkillError) as rollback_error:
                     raise ManagedSkillError(
