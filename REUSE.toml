@@ -98,6 +98,11 @@ SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
+path = "observal-server/services/cost/data/model_prices.json"
+SPDX-FileCopyrightText = "2026 amogh-dongre <amoghdongre16@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
 path = "observal-server/pyrightconfig.json"
 SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"

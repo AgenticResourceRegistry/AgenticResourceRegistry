@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Admin settings, diagnostics, and resource tuning routes."""
@@ -28,6 +29,7 @@ from models.user import User, UserRole
 from observal_shared.migration.constants import DEFAULT_PROJECT_ID
 from schemas.admin import EnterpriseConfigResponse, EnterpriseConfigUpdate, SettingRevokedResponse
 from services.config_validator import validate_runtime_config_async
+from services.cost import config as cost_config
 from services.insights import _normalize_model_id
 from services.secrets_redactor import REDACTED
 from services.security_events import EventType, SecurityEvent, Severity, emit_security_event
@@ -267,6 +269,11 @@ async def upsert_setting(
         value = value.lower()
         if value not in {"true", "false"}:
             raise HTTPException(status_code=422, detail="Usage reporting settings must be true or false")
+    elif key.startswith("cost."):
+        try:
+            value = cost_config.validate(key, value)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
     sensitive = key in ds.SENSITIVE_KEYS
     store_value = ds.encrypt_value(value) if sensitive else value

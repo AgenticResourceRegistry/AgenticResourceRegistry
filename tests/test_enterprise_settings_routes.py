@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused coverage for enterprise settings administration routes."""
@@ -1092,3 +1093,41 @@ async def test_connection_failure_is_truncated_and_mapped_to_hint(monkeypatch):
         "error": error[:200],
         "hint": "Invalid API key. Get one at console.anthropic.com",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "value", "detail"),
+    [
+        ("cost.currency", "EURO", "Currency must be a three-letter ISO 4217 code, for example EUR"),
+        ("cost.exchange_rates", "{not json", "Not valid JSON: Expecting property name enclosed in double quotes"),
+        ("cost.timezone", "Mars/Olympus", "Unknown timezone 'Mars/Olympus'; use an IANA name such as Europe/London"),
+    ],
+)
+async def test_upsert_rejects_invalid_cost_settings_without_writing(key, value, detail, boundaries, monkeypatch):
+    db = _db()
+    monkeypatch.setattr(es.ds, "is_externally_managed", lambda _key: False)
+
+    with pytest.raises(HTTPException) as error:
+        await es.upsert_setting(key, EnterpriseConfigUpdate(value=value), db=db, current_user=_actor())
+
+    assert error.value.status_code == 422
+    assert error.value.detail == detail
+    db.execute.assert_not_awaited()
+    boundaries.invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_upsert_cost_currency_is_upper_cased_and_persisted(boundaries, monkeypatch):
+    db = _db(_one(None))
+    monkeypatch.setattr(es.ds, "is_externally_managed", lambda _key: False)
+
+    response = await es.upsert_setting(
+        "cost.currency", EnterpriseConfigUpdate(value=" eur "), db=db, current_user=_actor()
+    )
+
+    stored = db.add.call_args.args[0]
+    assert stored.key == "cost.currency"
+    assert stored.value == "EUR"
+    boundaries.invalidate.assert_awaited_once_with("cost.currency")
+    assert response.value == "EUR"

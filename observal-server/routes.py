@@ -24,6 +24,7 @@ from api.routes.co_authors import router as co_authors_router
 from api.routes.component_activity import router as component_activity_router
 from api.routes.component_source import router as component_source_router
 from api.routes.config import router as config_router
+from api.routes.cost_intelligence import router as cost_intelligence_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.device_auth import router as device_auth_router
 from api.routes.exec_dashboard import router as exec_dashboard_router
@@ -101,6 +102,7 @@ REST_ROUTERS = (
     admin_sso_router,
     sso_saml_router,
     scim_router,
+    cost_intelligence_router,
     exec_dashboard_router,
     recommendations_router,
     ard_router,
