@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Dynamic settings service: DB-backed runtime configuration with Redis cache.
@@ -313,6 +314,11 @@ DEFAULTS: dict[str, str] = {
     "insights.registry_match_enabled": "true",
     "insights.registry_match_per_type": "6",
     "insights.registry_match_max_items": "24",
+    # Cost Intelligence dashboard. Prices default to provider list prices in USD.
+    "cost.currency": "USD",
+    "cost.exchange_rates": "",
+    "cost.price_overrides": "",
+    "cost.timezone": "UTC",
     # Auth
     "auth.self_registration_enabled": "false",
     # OIDC SSO. Changes require an API restart because the Authlib client is built at startup.
@@ -452,6 +458,19 @@ SETTING_SUBTITLES: dict[str, str] = {
         "Show the deprecated Leaderboard. Off by default: the tab, home page link, page, and leaderboard "
         "API are unavailable to everyone. Ranking data is kept. The Leaderboard will be removed in a future release."
     ),
+    "cost.currency": (
+        "Default display currency on the Cost Intelligence dashboard, as an ISO code such as EUR. "
+        "Any currency other than USD needs a rate in Exchange Rates."
+    ),
+    "cost.exchange_rates": (
+        "Units of each currency per 1 USD, set by an admin and shown on the dashboard with their date. "
+        'Example: {"as_of": "2026-11-01", "rates": {"EUR": 0.92, "INR": 84.10}}'
+    ),
+    "cost.price_overrides": (
+        "Negotiated or missing model prices in USD per 1M tokens, keyed by model name or a ^regex on the "
+        'reported model. Example: {"claude-opus-5-5": {"input": 3.6, "output": 18}}'
+    ),
+    "cost.timezone": "IANA timezone for day and month boundaries on the Cost Intelligence dashboard, e.g. Europe/London.",
 }
 
 RESTART_REQUIRED_KEYS: set[str] = {
@@ -539,6 +558,13 @@ SECTIONS: list[dict[str, Any]] = [
         "description": "Configure LLM provider for the insights engine. Supports any LiteLLM-compatible provider (Anthropic, OpenAI, Bedrock, Gemini, Azure, Ollama, etc).",
         "icon": "sparkles",
         "keys": [k for k in DEFAULTS if k.startswith("insights.")],
+    },
+    {
+        "id": "cost",
+        "title": "Cost",
+        "description": "Prices, currency and timezone for the Cost Intelligence dashboard. Leave empty to use provider list prices in USD.",
+        "icon": "dollar-sign",
+        "keys": [k for k in DEFAULTS if k.startswith("cost.")],
     },
     {
         "id": "danger",

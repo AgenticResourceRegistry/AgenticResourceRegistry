@@ -139,7 +139,8 @@
             "pages": [
               "self-hosting/configuration",
               "self-hosting/authentication",
-              "self-hosting/usage-reporting"
+              "self-hosting/usage-reporting",
+              "self-hosting/cost-intelligence"
             ]
           },
           {

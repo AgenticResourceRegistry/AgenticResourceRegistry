@@ -6,6 +6,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Table of contents
@@ -92,6 +93,7 @@
 * [Configure your registry](self-hosting/configuration.md)
 * [Set up authentication and SSO](self-hosting/authentication.md)
 * [Usage reporting](self-hosting/usage-reporting.md)
+* [Cost Intelligence](self-hosting/cost-intelligence.md)
 
 ### Operate and recover
 
