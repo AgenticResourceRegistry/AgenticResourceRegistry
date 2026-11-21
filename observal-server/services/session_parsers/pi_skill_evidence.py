@@ -92,6 +92,7 @@ def location_sha256(location: str) -> str:
 class PiSkillEvidenceExtractor:
     # /skill:name leaves no distinguishable origin in Pi sessions: never "invoked".
     observed_kinds: frozenset = frozenset({"available", "load"})
+    observed_scopes: frozenset = frozenset({"project", "user"})
 
     def extract(self, rows: Sequence[Mapping[str, object]]) -> SkillEvidenceExtraction:
         records: list[tuple[int, dict, Mapping[str, object]]] = []

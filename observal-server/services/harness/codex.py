@@ -12,6 +12,10 @@ from observal_shared.harness_registry import HARNESS_REGISTRY
 from services.harness import BaseHarnessAdapter, ConfigContext, McpConfigContext, register_adapter
 
 
+class CodexHttpEnvUnsupportedError(ValueError):
+    """The registry has env values, not Codex's runtime header-to-env mapping."""
+
+
 def _toml_string(value: str) -> str:
     return json.dumps(value)
 
@@ -43,11 +47,15 @@ class CodexAdapter(BaseHarnessAdapter):
 
     def format_mcp_config(self, ctx: McpConfigContext) -> dict:
         if ctx.url:
+            if ctx.server_env:
+                # Values are not native env_http_headers mappings; refuse rather
+                # than silently producing a verified but unauthenticated URL.
+                raise CodexHttpEnvUnsupportedError(
+                    "Codex HTTP MCP environment values require an explicit header-to-env mapping"
+                )
             entry: dict = {"url": ctx.url}
             if ctx.headers:
-                entry["headers"] = ctx.headers
-            if ctx.server_env:
-                entry["env"] = ctx.server_env
+                entry["http_headers"] = ctx.headers
         else:
             entry = ctx.standard_entry()
         return {"mcp_servers": {ctx.name: entry}}

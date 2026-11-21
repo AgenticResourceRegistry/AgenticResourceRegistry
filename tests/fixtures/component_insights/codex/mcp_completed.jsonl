@@ -1,0 +1,2 @@
+{"timestamp":"2026-10-17T18:00:00Z","type":"session_meta","payload":{"cli_version":"0.163.0","cwd":"/tmp/observal-codex-mcp-control"}}
+{"timestamp":"2026-10-17T18:00:01Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"call_001","server":"matrix-mcp-probe","tool":"ping","status":"completed","result":{"isError":false}}}}

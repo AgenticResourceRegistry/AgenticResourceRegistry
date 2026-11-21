@@ -11,6 +11,7 @@ import os
 import re
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from observal_cli.discovery.adapter_support import RichAdapterScanner
 from observal_cli.discovery.models import AdapterDiscoveryResult, DiagnosticCode, DiscoveryScope
@@ -24,6 +25,9 @@ from observal_cli.harness import (
 from observal_cli.harness.base import BaseAdapter, inline_agent_prompt
 from observal_cli.harness.protocol import HeadlessPlan, HeadlessRequest
 from observal_cli.shared.utils import _OBSERVAL_HOOK_MARKERS
+
+if TYPE_CHECKING:
+    from .codex_mcp_binding import McpConfigUndo
 
 
 def _load_toml(path: Path) -> dict:
@@ -56,10 +60,115 @@ class CodexAdapter(BaseAdapter):
     caller_env_markers = ("CODEX_THREAD_ID",)
     managed_agent_profiles = ("user:agents/{name}.toml", "project:.codex/agents/{name}.toml")
     managed_mcp_files = ("user:config.toml",)
+    tracked_mcp_scopes = ("project", "user")
 
     @property
     def harness_name(self) -> str:
         return "codex"
+
+    def redact_layer_content(self, display_path: str) -> bool:
+        # Codex keeps MCP credentials beside other settings; upload hashes only.
+        return display_path in {"user:config.toml", "project:.codex/config.toml"}
+
+    def mcp_manifest_path(self, scope: str) -> str | None:
+        return {"user": "user:config.toml", "project": "project:.codex/config.toml"}.get(scope)
+
+    def skill_manifest_path(self, scope: str, alias: str) -> str | None:
+        return {
+            "project": f"project:.agents/skills/{alias}/SKILL.md",
+            "user": f"user:.agents/skills/{alias}/SKILL.md",
+        }.get(scope)
+
+    def skill_location(self, scope: str, directory: str | None, alias: str) -> str | None:
+        if scope == "user":
+            return str((Path.home() / ".agents" / "skills" / alias / "SKILL.md").resolve())
+        if scope == "project" and directory:
+            return str((Path(directory) / ".agents" / "skills" / alias / "SKILL.md").resolve())
+        return None
+
+    def skill_shadow_paths(self, scope: str, directory: str | None, alias: str) -> list[Path]:
+        if scope not in {"project", "user"}:
+            return []
+        user_file = Path.home().resolve() / ".agents" / "skills" / alias / "SKILL.md"
+        if not directory:
+            # Without a native cwd we cannot rule out a project-root shadow.
+            # Treat even the active user file as ambiguous, not a verified pin.
+            return [user_file] if scope == "user" else []
+        # Another project/home/parent placement with this alias makes the
+        # effective native skill ambiguous even when the file bytes agree.
+        root = Path(directory).resolve()
+        parents = [
+            path for parent in root.parents if (path := parent / ".agents" / "skills" / alias / "SKILL.md") != user_file
+        ]
+        return [
+            *([user_file] if scope == "project" else []),
+            Path.home() / ".codex" / "skills" / alias / "SKILL.md",
+            *([root / ".agents" / "skills" / alias / "SKILL.md"] if scope == "user" else []),
+            *parents,
+        ]
+
+    def configure_tracked_mcp(self, scope: str, directory: str, alias: str, snippet: dict) -> McpConfigUndo:
+        from observal_shared.harness_registry import HARNESS_REGISTRY
+
+        from .codex_mcp_binding import (
+            codex_http_install_entry,
+            install_toml_mcp,
+            native_mcp_version,
+            stdio_install_entry,
+        )
+
+        tested = HARNESS_REGISTRY["codex"]["mcp_native_tested_versions"]
+        if native_mcp_version("codex") not in {f"codex-cli {version}" for version in tested}:
+            raise ValueError("Tracked Codex install requires a tested MCP runtime")
+        if self.read_installed_mcp(scope, directory, alias)[0] != "missing":
+            raise ValueError("Codex MCP alias is untrusted, configured or ambiguous")
+        servers = snippet.get("mcp_servers") if isinstance(snippet, dict) else None
+        entry = servers.get(alias) if isinstance(servers, dict) else None
+        verified = (
+            codex_http_install_entry(snippet, alias)
+            if isinstance(entry, dict) and "url" in entry
+            else stdio_install_entry(snippet, "mcp_servers", alias)
+        )
+        root = Path(directory).resolve() / ".codex" if scope == "project" else Path.home() / ".codex"
+        return install_toml_mcp(root / "config.toml", alias, verified)
+
+    def read_installed_mcp(self, scope: str, directory: str | None, alias: str) -> tuple[str, dict | None]:
+        import tomllib
+
+        from .codex_mcp_binding import codex_http_install_entry, read_toml_mcp, stdio_install_entry
+
+        if scope not in {"user", "project"} or not directory:
+            return "unverified", None
+        home = Path.home() / ".codex"
+        if Path(os.environ.get("CODEX_HOME", home)).resolve() != home.resolve():
+            return "unverified", None  # The v2 layer hashes only canonical home paths.
+        project = Path(directory).resolve()
+        user_path = home / "config.toml"
+        project_path = project / ".codex/config.toml"
+        primary, other = (project_path, user_path) if scope == "project" else (user_path, project_path)
+        status, entry = read_toml_mcp(primary, alias)
+        shadow, _ = read_toml_mcp(other, alias)
+        if shadow != "missing":
+            return "unverified", None
+        if status == "verified" and entry is not None:
+            try:
+                if "url" in entry:
+                    codex_http_install_entry({"mcp_servers": {alias: entry}}, alias)
+                else:
+                    stdio_install_entry({"mcp_servers": {alias: entry}}, "mcp_servers", alias)
+            except ValueError:
+                return "unverified", None
+        if scope == "project":
+            # Tested Codex CLI ignores untrusted project MCP settings.
+            try:
+                user = tomllib.loads(user_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, ValueError):
+                return "unverified", None
+            projects = user.get("projects")
+            trust = projects.get(str(project)) if isinstance(projects, dict) else None
+            if not isinstance(trust, dict) or trust.get("trust_level") != "trusted":
+                return "unverified", None
+        return status, entry
 
     @staticmethod
     def _session_id(path: Path) -> str:
@@ -191,7 +300,7 @@ class CodexAdapter(BaseAdapter):
             return ScanResult()
         try:
             data = _load_toml(config_file)
-            servers = data.get("mcp", {}).get("servers", {})
+            servers = self.extract_mcp_servers(data)
             mcps = []
             for srv_name, srv_config in servers.items():
                 if isinstance(srv_config, dict):
@@ -215,7 +324,7 @@ class CodexAdapter(BaseAdapter):
             return ScanResult()
         try:
             data = _load_toml(config_file)
-            servers = data.get("mcp", {}).get("servers", {})
+            servers = self.extract_mcp_servers(data)
             mcps = []
             for srv_name, srv_config in servers.items():
                 if isinstance(srv_config, dict):
@@ -325,9 +434,12 @@ class CodexAdapter(BaseAdapter):
         return "missing"
 
     def extract_mcp_servers(self, config: dict) -> dict:
+        canonical = config.get("mcp_servers")
+        if isinstance(canonical, dict):
+            return canonical
         mcp = config.get("mcp", {})
         if isinstance(mcp, dict) and isinstance(mcp.get("servers"), dict):
-            return mcp["servers"]
+            return mcp["servers"]  # Inventory only; never a verified Codex pin.
         return super().extract_mcp_servers(config)
 
     def patch_hooks(self, dry_run: bool) -> bool:

@@ -194,6 +194,31 @@ def test_normalizer_rejects_alias_collision_between_distinct_mcp_claims():
     assert all(row.verification_status == "unverified" for row in rows)
 
 
+@pytest.mark.parametrize("same_listing", [False, True])
+def test_mcp_same_alias_across_scopes_cannot_prove_runtime_identity(same_listing):
+    # Namespace-qualified Registry IDs can be distinct, while Codex's native
+    # tool event identifies only the local alias. Even two receipts for the same
+    # listing at different scopes cannot identify the effective settings entry.
+    pins = _pins()
+    pins["agents"][0]["harness"] = "codex"
+    pins["standalone"][0]["harness"] = "codex"
+    pins["standalone"][0]["local_name"] = "alice-probe"
+    drift = _drift()
+    for entry in drift["mcp_verifications"]:
+        entry["harness"] = "codex"
+    drift["mcp_verifications"][1]["alias"] = "alice-probe"
+    if same_listing:
+        pins["standalone"][0]["id"] = A
+        pins["standalone"][0]["version"] = "1.0.0"
+        drift["mcp_verifications"][1]["component_id"] = A
+    rows = normalize_snapshot(pins, drift)
+    assert len(rows) == 2 and {row.scope for row in rows} == {"user", "project"}
+    assert all(row.verification_status == "unverified" for row in rows)
+    pins["standalone"][0]["local_name"] = "other-alias"
+    drift["mcp_verifications"][1]["alias"] = "other-alias"
+    assert all(row.verification_status == "verified" for row in normalize_snapshot(pins, drift))
+
+
 class _Rows:
     def __init__(self, rows):
         self.rows = rows
@@ -285,7 +310,7 @@ async def test_resolver_direct_deleted_parent_name_ambiguity_and_independent_ver
     assert no_version[0].component_id == A and no_version[0].component_version_id == ""
     deleted_parent = replace(parent_match, parent_agent_id="55555555-5555-4555-8555-555555555555")
     assert (await resolver.resolve_occurrences(db, [deleted_parent]))[0].identity_status == "unresolved"
-    assert CURRENT_EXTRACTOR_VERSION == 2  # Key-contract change rebuilds v1 projections.
+    assert CURRENT_EXTRACTOR_VERSION == 3  # Rebuild ambiguous cross-scope MCP receipts.
 
 
 @pytest.mark.asyncio

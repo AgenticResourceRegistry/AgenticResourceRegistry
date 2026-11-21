@@ -134,6 +134,25 @@ def test_a_grounded_reply_is_accepted():
     ]
 
 
+def test_unmeasured_codex_skill_load_cannot_be_inferred_by_model():
+    metrics = {"present_sessions": 5, "invoked_sessions": 1, "confirmed_loads": None, "loaded_sessions": None}
+    prompt, constraints = ca.build_prompt(_report(kind="skill"), metrics, [], None, {})
+    assert constraints["skill_load_unmeasured"] and "selection" in prompt
+    reply = {
+        "at_a_glance": {
+            "health": "watch",
+            "summary": "Native Codex project skill selection was recorded without separate confirmation.",
+        },
+        "what_works": [],
+        "friction": [],
+        "suggestions": [],
+    }
+    assert ca.validate_analysis(reply, **constraints)
+    reply["at_a_glance"]["summary"] = "The Codex skill was loaded in a session."
+    with pytest.raises(ValueError, match="loads are unmeasured"):
+        ca.validate_analysis(reply, **constraints)
+
+
 def _with(path, value):
     reply = copy.deepcopy(_reply())
     target = reply

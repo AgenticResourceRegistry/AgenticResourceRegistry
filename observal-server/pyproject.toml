@@ -23,6 +23,7 @@ dependencies = [
     "pydantic-settings>=2.14.2",
     "python-dotenv",
     "email-validator",
+    "dnspython>=2.9.0",  # CVE-2026-114605 (DNS decompression DoS)
     "alembic",
     "httpx",
     "gitpython>=3.1.59",
@@ -51,7 +52,7 @@ dependencies = [
     "fastapi-cache2>=0.2.2",
     "structlog>=24.1.0",
     "loguru>=0.7.0",
-    "prometheus-fastapi-instrumentator>=7.0.0",
+    "prometheus-fastapi-instrumentator>=8.1.0,<9.0.0",  # 8.1 supports patched Starlette 1.x
     "urllib3>=2.8.0",
     "aiohttp>=3.14.4",
     "certifi>=2026.10.19",
@@ -65,16 +66,6 @@ dependencies = [
 
 [tool.uv.sources]
 observal-shared = { path = "../packages/observal-shared" }
-
-[tool.uv]
-# CVE-2026-48710 / CVE-2026-54282 / CVE-2026-54283: starlette <1.3.1 has
-# Host header poisoning, url-authority confusion, and unbounded urlencoded
-# form parsing. prometheus-fastapi-instrumentator 7.1.0 caps starlette<1.0.0
-# but is runtime-compatible with 1.x (only a type annotation differs).
-# Remove this override when upstream releases starlette 1.x support.
-override-dependencies = [
-    "starlette>=1.3.1",
-]
 
 [dependency-groups]
 dev = [

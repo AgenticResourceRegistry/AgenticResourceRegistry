@@ -22,7 +22,15 @@ if TYPE_CHECKING:
 
     from services.session_parsers.skill_evidence import SkillEvidence
 
-SKILL_MATCHER_VERSION = 2
+# 3: Codex's version- and project-scoped native selection adds an invocation
+# fact; replay old availability-only publications, never turn them into zero use.
+# 4: Accept only the observed 0.163.0 combined AGENTS.md/environment context
+# before the typed turn; replay earlier unsupported sessions, not measured zeros.
+# 5: User-scope Codex selection requires a verified exact user file and an
+# attributed native offer before a no-selection denominator can be measured.
+# 6: opt in tested 0.165.0 native project/user inventory and selections.
+# 7: require completed 0.165.0 native turns before attributing an offer or selection.
+SKILL_MATCHER_VERSION = 7
 
 
 @dataclass(frozen=True)
