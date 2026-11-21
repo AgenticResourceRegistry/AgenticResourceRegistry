@@ -512,3 +512,21 @@ def test_versions_json_uses_local_authority(isolated, monkeypatch: pytest.Monkey
     assert payload["current_version"] == "1.5.0"
     assert payload["versions"][0]["backup"]["size_mb"] == 4
     assert client.get.call_count == 0
+
+
+def test_versions_json_uses_newest_backup_per_version(isolated, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_compose(isolated, monkeypatch, "1.5.0")
+    monkeypatch.setattr(
+        isolated.version_check, "fetch_available_server_images", MagicMock(return_value=["2.0.0", "1.5.0"])
+    )
+    backups = [
+        {"name": "v1.5.0-20260102T120000", "size_mb": 8, "path": "/new"},
+        {"name": "v1.5.0-20260101T120000", "size_mb": 4, "path": "/old"},
+    ]
+    monkeypatch.setattr(isolated.backup, "list_backups", MagicMock(return_value=backups))
+
+    result = runner.invoke(app, ["server", "versions", "--output", "json"])
+
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["versions"][0]["backup"]["path"] == "/new"
