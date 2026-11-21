@@ -1139,7 +1139,10 @@ def server_versions(
             remediation="Check network and GHCR access, then retry.",
         )
     backups = list_backups()
-    backup_versions = {item["name"].split("-")[0].removeprefix("v"): item for item in backups}
+    backup_versions = {}
+    for item in backups:
+        version_key = item["name"].split("-")[0].removeprefix("v")
+        backup_versions.setdefault(version_key, item)
     versions = []
     for version in ([current] if current != "unknown" else []) + available[:10]:
         if any(item["version"] == version for item in versions):
