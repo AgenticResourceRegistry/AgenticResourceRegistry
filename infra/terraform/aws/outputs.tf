@@ -85,6 +85,35 @@ output "log_group_names" {
     worker    = aws_cloudwatch_log_group.ecs_worker.name
     init      = aws_cloudwatch_log_group.ecs_init.name
     data_host = aws_cloudwatch_log_group.data_host.name
-    flow_logs = aws_cloudwatch_log_group.flow_logs.name
+    flow_logs = local.should_create_vpc ? module.vpc[0].flow_logs_log_group_name : ""
   }
+}
+output "vpc_id" {
+  description = "ID of the VPC."
+  value       = local.should_create_vpc ? module.vpc[0].vpc_id : var.vpc_id
+}
+
+output "vpc_cidr" {
+  description = "CIDR block of the VPC."
+  value       = data.aws_vpc.vpc.cidr_block
+}
+
+output "public_subnet_ids" {
+  description = "IDs of the public subnets."
+  value       = local.public_subnet_ids
+}
+
+output "private_subnet_ids" {
+  description = "IDs of the private subnets."
+  value       = local.private_subnet_ids
+}
+
+output "nat_gateway_ips" {
+  description = "Elastic IPs of the NAT gateway."
+  value       = local.should_create_vpc ? module.vpc[0].nat_gateway_ips : []
+}
+
+output "internal_zone_id" {
+  description = "ID of the private Route 53 zone."
+  value       = aws_route53_zone.internal.zone_id
 }
