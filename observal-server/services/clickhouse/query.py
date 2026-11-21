@@ -1,12 +1,19 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """ClickHouse query functions for live session telemetry tables."""
 
+from __future__ import annotations
+
 import time
+from typing import TYPE_CHECKING
 
 from loguru import logger as optic
 
 import services.clickhouse.client as _client
+
+if TYPE_CHECKING:
+    from services.otel.types import SessionKey
 
 
 async def query_recent_events(minutes: int = 60) -> dict:
@@ -160,3 +167,50 @@ async def query_existing_for_dedup(
     except Exception as e:
         optic.error("dedup query failed for session {}: {}", session_id, e)
         raise
+
+
+# Every column the OTLP log and span output reads.
+_SESSION_ROW_COLUMNS = (
+    "session_id, project_id, user_id, harness, agent_id, agent_version, parent_session_id, "
+    "line_offset, line_hash, is_source_record, rendered, event_type, timestamp, ingested_at, "
+    "uuid, parent_uuid, tool_name, tool_id, model, "
+    "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, credits, "
+    "raw_line, raw_line_truncated"
+)
+
+
+async def query_session_rows(
+    key: SessionKey,
+    *,
+    after_line: int = -1,
+    up_to_line: int | None = None,
+) -> list[dict]:
+    """Return one session's stored rows in ``(after_line, up_to_line]``, ordered by ``line_offset``.
+
+    Reads by primary key and includes every stored row: synthetic rows
+    (``is_source_record = 0``) and rows the UI does not render.
+    """
+    upper = "AND line_offset <= {upto:Int64} " if up_to_line is not None else ""
+    sql = (
+        "SELECT " + _SESSION_ROW_COLUMNS + " FROM session_events FINAL "
+        "WHERE project_id = {pid:String} AND user_id = {uid:String} "
+        "AND harness = {harness:String} AND session_id = {sid:String} "
+        "AND line_offset > {after:Int64} " + upper + "ORDER BY line_offset "
+        "SETTINGS max_final_threads = 4, do_not_merge_across_partitions_select_final = 1 "
+        "FORMAT JSON"
+    )
+    params = {
+        "param_pid": key.project_id,
+        "param_uid": key.user_id,
+        "param_harness": key.harness,
+        "param_sid": key.session_id,
+        "param_after": str(after_line),
+    }
+    if up_to_line is not None:
+        params["param_upto"] = str(up_to_line)
+    r = await _client._query(sql, params)
+    r.raise_for_status()
+    rows = r.json().get("data", [])
+    for row in rows:
+        row["line_offset"] = int(row["line_offset"])
+    return rows
