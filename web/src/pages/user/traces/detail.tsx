@@ -15,6 +15,7 @@ import type {
 	SubagentSession,
 } from "@/lib/types";
 import { kindChipClasses, eventTextClass } from "@/lib/kind-colors";
+import { countToolUsage } from "./tool-usage";
 import {
 	FileText,
 	ChevronDown,
@@ -1759,7 +1760,14 @@ function SessionStats({
 		const isGemini = serviceName === "gemini";
 		const isCopilotCli = isCopilotCliService(serviceName ?? "", sessionId);
 		const models = new Set<string>();
-		const tools: Record<string, number> = {};
+		// Count pre/result hooks for the same tool call as one invocation.
+		const tools = countToolUsage(
+			events.map((evt) => ({
+				eventName: getEventName(evt),
+				toolName: evt.attributes?.tool_name,
+				toolUseId: evt.attributes?.tool_use_id,
+			})),
+		);
 
 		for (const evt of events) {
 			const attrs = evt.attributes ?? {};
@@ -1796,24 +1804,8 @@ function SessionStats({
 			if (attrs.credits) credits += parseFloat(attrs.credits) || 0;
 			if (attrs.model) models.add(attrs.model);
 
-			if (eName === "hook_posttooluse") {
-				toolCalls++;
-				const tn = attrs.tool_name || "unknown";
-				tools[tn] = (tools[tn] || 0) + 1;
-			}
-
-			if (isHookEvent(eName)) {
-				hookEvents++;
-				if (
-					attrs.tool_name &&
-					attrs.tool_name !== "user_prompt" &&
-					attrs.tool_name !== "assistant_response" &&
-					attrs.tool_name !== "assistant_thinking"
-				) {
-					const tn = attrs.tool_name;
-					tools[tn] = (tools[tn] || 0) + 1;
-				}
-			}
+			if (eName === "hook_posttooluse") toolCalls++;
+			if (isHookEvent(eName)) hookEvents++;
 		}
 
 		// Detect reconciliation enrichment (JSONL data was reconciled to server)

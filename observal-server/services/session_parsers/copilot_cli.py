@@ -54,8 +54,6 @@ def parse_rows(rows: list[dict]) -> list[dict]:
             event_type = str_field(envelope_event, "type")
             data = {k: v for k, v in envelope_event.items() if k != "type"}
             ts = pick_timestamp(parsed.get("ts"), row_ts, ingested_at)
-            event_id = str_field(parsed, "agentId")
-            parent_id = ""
         else:
             # Flat format fallback: {type, data, id, timestamp, parentId}
             event_type = str_field(parsed, "type")
@@ -63,8 +61,6 @@ def parse_rows(rows: list[dict]) -> list[dict]:
             if not isinstance(data, dict):
                 data = {}
             ts = pick_timestamp(parsed.get("timestamp"), row_ts, ingested_at)
-            event_id = str_field(parsed, "id")
-            parent_id = str_field(parsed, "parentId")
 
         if not event_type:
             events.append(basic_event(row))
@@ -78,9 +74,9 @@ def parse_rows(rows: list[dict]) -> list[dict]:
         elif event_type == "assistant.message":
             _handle_assistant_message(data, ts, harness, events)
         elif event_type == "tool.call":
-            _handle_tool_call(data, ts, harness, events, tool_call_index, event_id)
+            _handle_tool_call(data, ts, harness, events, tool_call_index, str_field(data, "toolCallId"))
         elif event_type in ("tool.result", "tool.execution_complete"):
-            _handle_tool_result(data, ts, harness, events, tool_call_index, parent_id)
+            _handle_tool_result(data, ts, harness, events, tool_call_index, str_field(data, "toolCallId"))
         elif event_type == "agent.thinking":
             _handle_thinking(data, ts, harness, events)
         elif event_type == "session.start":
@@ -153,7 +149,7 @@ def _handle_assistant_message(data: dict, ts: str, harness: str, events: list[di
 
 
 def _handle_tool_call(
-    data: dict, ts: str, harness: str, events: list[dict], tool_call_index: dict[str, int], event_id: str
+    data: dict, ts: str, harness: str, events: list[dict], tool_call_index: dict[str, int], tool_call_id: str
 ) -> None:
     tool_name = data.get("name", data.get("toolName", ""))
     tool_input = data.get("input", data.get("args", {}))
@@ -169,17 +165,17 @@ def _handle_tool_call(
             "attributes": {
                 "tool_name": tool_name,
                 "tool_input": tool_input_str,
-                "tool_use_id": event_id,
+                "tool_use_id": tool_call_id,
             },
             "service_name": harness,
         }
     )
-    if event_id:
-        tool_call_index[event_id] = idx
+    if tool_call_id:
+        tool_call_index[tool_call_id] = idx
 
 
 def _handle_tool_result(
-    data: dict, ts: str, harness: str, events: list[dict], tool_call_index: dict[str, int], parent_id: str
+    data: dict, ts: str, harness: str, events: list[dict], tool_call_index: dict[str, int], tool_call_id: str
 ) -> None:
     result = data.get("output", data.get("result", ""))
     if isinstance(result, dict):
@@ -189,9 +185,9 @@ def _handle_tool_result(
     else:
         result_text = str(result)
 
-    # Try to merge into the preceding tool_call event via parentId
-    if parent_id and parent_id in tool_call_index:
-        existing = events[tool_call_index[parent_id]]
+    # Merge only when the producer identifies the same tool invocation.
+    if tool_call_id and tool_call_id in tool_call_index:
+        existing = events[tool_call_index[tool_call_id]]
         existing["attributes"]["tool_response"] = result_text
     else:
         tool_name = data.get("name", data.get("toolName", ""))
@@ -203,7 +199,7 @@ def _handle_tool_result(
                 "attributes": {
                     "tool_name": tool_name,
                     "tool_response": result_text,
-                    "tool_use_id": parent_id,
+                    "tool_use_id": tool_call_id,
                 },
                 "service_name": harness,
             }
