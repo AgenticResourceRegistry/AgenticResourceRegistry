@@ -190,7 +190,7 @@ export default function RegistryHome() {
               <li className="min-w-0">
                 <p className="mb-1.5 font-medium text-foreground">3. Pull it into your harness</p>
                 <code className="block overflow-x-auto whitespace-nowrap rounded-md bg-background px-3 py-2 font-mono text-xs text-foreground">
-                  observal pull namespace/agent --harness pi
+                  observal agent pull namespace/agent --harness pi
                 </code>
               </li>
             </ol>
