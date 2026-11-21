@@ -979,6 +979,22 @@ class TestServerAdapterFormatConfig:
         assert mcp_config["path"] == ".mcp.json"
         assert "mcpServers" in mcp_config["content"]
 
+    def test_copilot_cli_frontmatter_includes_mcp_server_tools(self):
+        """MCP server frontmatter in .agent.md must specify per-server tools for Copilot CLI schema validity."""
+        from services.harness.copilot_cli import CopilotCliAdapter
+
+        ctx = self._make_ctx(
+            safe_name="test-agent",
+            mcp_configs={"my-srv": {"command": "npx", "args": ["-y", "srv"]}},
+        )
+        adapter = CopilotCliAdapter()
+        result = adapter.format_config(ctx)
+
+        content = result["agent_profile"]["content"]
+        assert "mcp-servers:" in content
+        assert "my-srv:" in content
+        assert "tools: ['*']" in content.split("my-srv:")[1]
+
     def test_no_prompt_files_without_prompt_components(self):
         from services.harness.copilot_cli import CopilotCliAdapter
 
