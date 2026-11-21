@@ -312,4 +312,3 @@ export function useReportSections() {
 		hideAll: () => update(new Set()),
 	};
 }
-
