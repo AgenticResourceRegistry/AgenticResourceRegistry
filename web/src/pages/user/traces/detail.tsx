@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 // SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState, useCallback, useMemo, createElement } from "react";
@@ -15,6 +16,7 @@ import type {
 	SubagentSession,
 } from "@/lib/types";
 import { kindChipClasses, eventTextClass } from "@/lib/kind-colors";
+import { summarizeToolCalls } from "@/lib/trace-tool-usage";
 import {
 	FileText,
 	ChevronDown,
@@ -194,7 +196,7 @@ const FILTER_CATEGORIES: FilterCategory[] = [
 	},
 	{
 		key: "tools",
-		label: "Tools",
+		label: "Tool events",
 		match: (e) =>
 			[
 				"tool_result",
@@ -202,6 +204,7 @@ const FILTER_CATEGORIES: FilterCategory[] = [
 				"hook_posttooluse",
 				"hook_pretooluse",
 				"hook_posttoolusefailure",
+				"hook_toolresult",
 			].includes(e),
 		color: kindChipClasses("tools"),
 	},
@@ -1546,6 +1549,7 @@ function TurnNode({
 		return (
 			en === "hook_posttooluse" ||
 			en === "hook_pretooluse" ||
+			en === "hook_toolresult" ||
 			en === "tool_result"
 		);
 	}).length;
@@ -1752,14 +1756,13 @@ function SessionStats({
 		let totalCacheRead = 0;
 		let totalCacheWrite = 0;
 		let apiCalls = 0;
-		let toolCalls = 0;
+		const { toolCalls, tools } = summarizeToolCalls(events);
 		let hookEvents = 0;
 		let credits = 0;
 		let isKiro = serviceName === "kiro" || sessionId.startsWith("kiro-");
 		const isGemini = serviceName === "gemini";
 		const isCopilotCli = isCopilotCliService(serviceName ?? "", sessionId);
 		const models = new Set<string>();
-		const tools: Record<string, number> = {};
 
 		for (const evt of events) {
 			const attrs = evt.attributes ?? {};
@@ -1796,24 +1799,7 @@ function SessionStats({
 			if (attrs.credits) credits += parseFloat(attrs.credits) || 0;
 			if (attrs.model) models.add(attrs.model);
 
-			if (eName === "hook_posttooluse") {
-				toolCalls++;
-				const tn = attrs.tool_name || "unknown";
-				tools[tn] = (tools[tn] || 0) + 1;
-			}
-
-			if (isHookEvent(eName)) {
-				hookEvents++;
-				if (
-					attrs.tool_name &&
-					attrs.tool_name !== "user_prompt" &&
-					attrs.tool_name !== "assistant_response" &&
-					attrs.tool_name !== "assistant_thinking"
-				) {
-					const tn = attrs.tool_name;
-					tools[tn] = (tools[tn] || 0) + 1;
-				}
-			}
+			if (isHookEvent(eName)) hookEvents++;
 		}
 
 		// Detect reconciliation enrichment (JSONL data was reconciled to server)
@@ -2318,6 +2304,11 @@ export default function TraceDetailPage() {
 												<button
 													type="button"
 													key={cat.key}
+													title={
+																	cat.key === "tools"
+																		? "Counts pre-use and outcome events separately; Tool Calls counts paired invocations once."
+																		: undefined
+																}
 													onClick={() => toggleFilter(cat.key)}
 									aria-pressed={activeFilters.has(cat.key)}
 													className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-medium border transition-all ${
