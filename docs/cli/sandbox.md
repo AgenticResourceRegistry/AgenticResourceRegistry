@@ -43,7 +43,7 @@ observal registry sandbox submit --from-file sandbox.json --output json
 observal registry sandbox submit --submit SANDBOX_UUID --message "Second revision" --output json
 ```
 
-Name, description, runtime type, and image are required. `--version` defaults to `1.0.0` and must be a valid version string. `--resource-limits` and `--runtime-config` take JSON objects. `--harness` is repeatable and every value must be a registered harness. `--source-url`, `--source-ref`, and `--sandbox-path` record source provenance for review; they do not build an image or fetch artifacts.
+Name, description, runtime type, and image are required. Firecracker sandboxes also require `--runtime-config` with `config_path`, or with both `kernel_image_path` and `rootfs_path`. `--version` defaults to `1.0.0` and must be a valid version string; a `--from-file` payload must carry its own `version` — the default applies only to flag and interactive submissions, and `--version` does not merge into the file. `--resource-limits` and `--runtime-config` take JSON objects. `--harness` is repeatable and every value must be a registered harness. `--source-url`, `--source-ref`, and `--sandbox-path` record source provenance for review; they do not build an image or fetch artifacts.
 
 Valid runtime types are `docker`, `lxc`, `firecracker`, and `wasm`. Valid network policies are `none`, `host`, `bridge`, and `restricted` (the `restricted` Docker policy currently falls back to no-network mode, not a general allowlist profile).
 
@@ -61,7 +61,7 @@ observal registry sandbox show alice/dev-env --output json
 
 `list` shows approved sandboxes only and accepts `--runtime`, `--search`, `--namespace`, and `--team` filters. Row numbers are scoped to the latest Sandbox list. Empty lists clear previous Sandbox row references.
 
-`show` accepts a UUID, name, row number, or `@alias` and displays runtime type, container image, resource limits, status, timestamps, and visible fork provenance. A source the viewer cannot access is shown only as **Source unavailable**.
+`show` accepts a UUID, name, row number, or `@alias` and displays runtime type, container image, status, timestamps, and visible fork provenance. The table omits resource limits and runtime config; use `--output json` to inspect them in the returned server object. A source the viewer cannot access is shown only as **Source unavailable**.
 
 ## Fork
 
@@ -108,11 +108,13 @@ Remove requires the user UUID returned by list.
 
 ## Agent usage
 
-There is no standalone sandbox install command. Sandboxes are attached to agents by UUID and are delivered when the agent is pulled, which adds an `observal-sandbox` MCP entry exposing the sandbox tools:
+There is no standalone sandbox install command. Sandboxes are attached to agents by UUID and are delivered when the agent is pulled, which adds an `observal-sandbox` MCP entry exposing the sandbox tools. `agent add` edits the local YAML and `agent build` validates it; publish the result for review — `agent release` version-bumps an approved agent — then pull the release that contains the sandbox:
 
 ```bash
 observal agent add sandbox <sandbox-uuid>
 observal agent build
+observal agent publish --output json
+observal agent pull alice/my-agent --output json
 ```
 
 ## Related
