@@ -742,15 +742,25 @@ def migrate_agent_markers() -> int:
     migrated = 0
     markers_found: list[tuple[Path, dict]] = []
 
-    # Scan sync_state.json for known project directories
+    # Best-effort readability check of the legacy sync state. Marker discovery scans the
+    # filesystem (not this file), so an unreadable state must not stop migration; the failure
+    # is logged instead of being silently swallowed (see the exception handler below).
     state_file = CONFIG_DIR / "sync_state.json"
     if state_file.exists():
+        # The parsed payload is intentionally unused: sync_state keys are session IDs, and
+        # marker discovery below scans common directories for .observal/agent files.
         try:
             json.loads(state_file.read_text())
-            # sync_state keys are session IDs, but we can look for project markers
-            # in common directories. Better approach: scan home for .observal/agent files.
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError, UnicodeError) as exc:
+            # Log only the path and exception type name. sync_state can contain session
+            # metadata and a JSONDecodeError message embeds a snippet of its input, so the raw
+            # exception, file contents and stack are deliberately not included (AGENTS.md
+            # Loguru rules; same convention as observal_cli/main.py).
+            optic.warning(
+                "could not read lockfile sync state during agent marker migration: path={} error_type={}",
+                state_file,
+                type(exc).__name__,
+            )
 
     # Scan common locations for .observal/agent files
     home = Path.home()
