@@ -115,7 +115,7 @@ Re-running a partially completed file is safe only after inspecting results. Exi
 
 ## MCP servers
 
-MCP server registry commands for submitting, browsing, generating configuration, editing, and archiving MCP server listings.
+MCP server registry commands for submitting, browsing, generating configuration, editing, and archiving MCP server listings. See [`observal registry mcp`](/cli/mcp) for the focused reference page.
 
 ### `observal registry mcp submit`
 

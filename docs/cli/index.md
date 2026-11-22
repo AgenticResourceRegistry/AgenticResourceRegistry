@@ -42,6 +42,7 @@ Index of the main `observal` command groups, output conventions, and related gui
 | [`observal server migrate`](/cli/migrate) | Export/import PostgreSQL registry archives and ClickHouse telemetry separately |
 | [`observal self`](/cli/self)                                                                 | Upgrade or downgrade the CLI                                                          |
 | [`observal registry prompt`](/cli/prompt)                                                    | Manage reusable prompts in the registry                                               |
+| [`observal registry mcp`](/cli/mcp)                                                        | Submit, browse, and install MCP server listings                                       |
 | [`observal server`](/cli/server)                                                             | Manage server lifecycle and supported deployment/upgrade workflows                           |
 | [`observal registry skill`](/cli/skill)                                                      | Submit, browse, and install portable skill packages                                   |
 
