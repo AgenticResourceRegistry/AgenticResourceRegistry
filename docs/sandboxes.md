@@ -42,3 +42,8 @@ Other dispatchers have different requirements and do not inherit identical netwo
 There is no standalone registry sandbox install. Add its exact component release to an agent, build/review the composition, inspect a strict pull preview, then verify the tool in the target harness. [Agent/component versioning](/guides/version-components) controls whether existing pins move.
 
 No obsolete `observal-cli[sandbox]` dependency extra is required by the current package definition; the Docker SDK is a core CLI dependency. Missing local runtimes still need real installation, not a metadata-only workaround.
+
+## Related
+
+* [`observal registry sandbox`](/cli/sandbox): submit, list, fork, and lifecycle command reference
+* [Publish a sandbox configuration](/registry-sandbox-helper): author and reviewer workflow

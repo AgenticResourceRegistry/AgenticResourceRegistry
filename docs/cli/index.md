@@ -44,6 +44,7 @@ Index of the main `observal` command groups, output conventions, and related gui
 | [`observal registry prompt`](/cli/prompt)                                                    | Manage reusable prompts in the registry                                               |
 | [`observal server`](/cli/server)                                                             | Manage server lifecycle and supported deployment/upgrade workflows                           |
 | [`observal registry skill`](/cli/skill)                                                      | Submit, browse, and install portable skill packages                                   |
+| [`observal registry sandbox`](/cli/sandbox)                                                  | Submit, browse, and manage sandbox environments                                       |
 
 ## Global options
 

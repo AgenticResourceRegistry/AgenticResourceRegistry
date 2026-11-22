@@ -870,6 +870,8 @@ observal registry sandbox edit abc123 --from-file updates.json
 observal registry sandbox edit @env --runtime-type docker --version 2.0.0 --output json
 ```
 
+See [`observal registry sandbox`](/cli/sandbox) for the complete sandbox command reference, including `fork`, `archive`, `unarchive`, `transfer-owner`, and `co-authors`.
+
 ---
 
 ## Component versions
