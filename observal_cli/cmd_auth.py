@@ -905,8 +905,8 @@ def _fetch_endpoints(server_url: str) -> dict:
         r = httpx.get(f"{server_url.rstrip('/')}/api/v1/config/endpoints", timeout=5)
         if r.status_code == 200:
             return r.json()
-    except Exception:
-        pass
+    except (httpx.HTTPError, ValueError) as exc:
+        optic.debug("endpoints fetch failed, using defaults: error={}", exc)
     return {}
 
 
