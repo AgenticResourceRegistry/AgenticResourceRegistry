@@ -1222,8 +1222,16 @@ def test_fetch_endpoints_fails_closed_for_404(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_fetch_endpoints_fails_closed_when_offline(monkeypatch: pytest.MonkeyPatch) -> None:
-    get = MagicMock(side_effect=RuntimeError("offline"))
+    get = MagicMock(side_effect=httpx.ConnectError("offline"))
     monkeypatch.setattr(auth.httpx, "get", get)
+
+    assert auth._fetch_endpoints(SERVER_URL) == {}
+
+
+def test_fetch_endpoints_fails_closed_for_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = MagicMock(status_code=200)
+    response.json.side_effect = ValueError("not json")
+    monkeypatch.setattr(auth.httpx, "get", MagicMock(return_value=response))
 
     assert auth._fetch_endpoints(SERVER_URL) == {}
 
