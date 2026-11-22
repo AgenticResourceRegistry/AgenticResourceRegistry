@@ -1031,6 +1031,71 @@ def test_marker_migration_with_no_markers_writes_an_empty_schema(isolated_lockfi
     assert lockfile.migrate_agent_markers() == 0
 
 
+@pytest.mark.parametrize(
+    ("failure", "error_type"),
+    [
+        ("invalid_json", "JSONDecodeError"),
+        ("permission_error", "PermissionError"),
+    ],
+    ids=("invalid-json", "permission-denied"),
+)
+def test_sync_state_read_failure_is_logged_and_continues(isolated_lockfile, monkeypatch, tmp_path, failure, error_type):
+    home = tmp_path / "home"
+    home.mkdir()
+    isolated_lockfile.config_dir.mkdir(parents=True)
+    state_file = isolated_lockfile.config_dir / "sync_state.json"
+
+    if failure == "invalid_json":
+        state_file.write_text("{broken", encoding="utf-8")
+    else:
+        state_file.write_text("{}", encoding="utf-8")
+        real_read_text = Path.read_text
+
+        def denied_read_text(self, *args, **kwargs):
+            if self == state_file:
+                raise PermissionError("denied")
+            return real_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", denied_read_text)
+
+    child = home / "child"
+    child.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(Path, "cwd", lambda: child)
+
+    levels = []
+    messages = []
+
+    def capture(message):
+        levels.append(message.record["level"].name)
+        messages.append(str(message))
+
+    # Capture WARNING+ records; the function's INFO logs (e.g. the migration start line) are filtered.
+    sink_id = lockfile.optic.add(capture, level="WARNING")
+    try:
+        migrated = lockfile.migrate_agent_markers()
+    finally:
+        lockfile.optic.remove(sink_id)
+
+    # The failure path keeps the same fallback value/artifact as an absent sync_state file.
+    assert migrated == 0
+    assert raw_lockfile(isolated_lockfile) == {
+        "lock_version": 2,
+        "updated_at": NOW,
+        "registries": {},
+    }
+
+    # The swallowed error is now observable, with path + exception type only.
+    logged = "\n".join(messages)
+    assert levels == ["WARNING"]
+    assert "sync state" in logged
+    assert str(state_file) in logged
+    assert error_type in logged
+    # Never log file contents or the raw exception message (would contain session data/leaks).
+    assert "{broken" not in logged
+    assert "denied" not in logged
+
+
 def test_marker_migration_deduplicates_projects_and_cleans_valid_markers(isolated_lockfile, monkeypatch, tmp_path):
     home = tmp_path / "home"
     code = home / "code"
