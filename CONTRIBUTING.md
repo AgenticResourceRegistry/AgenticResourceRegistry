@@ -148,6 +148,7 @@ Use `//` for TypeScript, `<!-- -->` for Markdown. CI will block merge if any fil
 ```bash
 make test      # quick
 make test-v    # verbose
+make test-cov  # with coverage (writes observal-server/coverage.xml and htmlcov/)
 ```
 
 All tests must pass before submitting. Tests mock all external services so Docker is not required. Include tests for any feature or bug fix.
