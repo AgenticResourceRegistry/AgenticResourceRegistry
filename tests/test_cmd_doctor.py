@@ -53,6 +53,7 @@ from observal_cli.cmd_doctor import (
     doctor_patch,
 )
 from observal_cli.harness import ensure_loaded
+from observal_cli.harness_specs.cursor_hooks_spec import is_current_push_hook_entry
 from observal_cli.shared.utils import is_observal_hook_entry, is_observal_matcher_group
 from observal_shared.opencode_plugin_source import OPENCODE_PLUGIN_SOURCE
 
@@ -467,7 +468,7 @@ class TestPatchFunctions:
         data = read_json(hooks_path)
         commands = [entry["command"] for entry in data["hooks"]["beforeSubmitPrompt"]]
         assert "foreign" in commands
-        assert any("hooks.session_push --harness cursor" in command for command in commands)
+        assert any(is_current_push_hook_entry(e) for e in data["hooks"]["beforeSubmitPrompt"])
         assert _patch_cursor(dry_run=False) is False
 
     def test_patch_pi_installs_local_extension_and_manifest(self, tmp_path: Path):
@@ -717,11 +718,25 @@ class TestCleanupFunctions:
 
     def test_cleanup_cursor_preserves_foreign_hooks(self, tmp_path: Path):
         hooks_path = tmp_path / ".cursor/hooks.json"
-        write_json(hooks_path, {"hooks": {"stop": [{"command": "foreign"}, {"command": "cursor_session_push"}]}})
+        write_json(
+            hooks_path,
+            {
+                "hooks": {
+                    "stop": [
+                        {"command": "foreign"},
+                        {"command": "python /home/me/tools/session_push.py"},
+                        {"command": "python -m observal_cli.hooks.cursor_session_push"},
+                    ]
+                }
+            },
+        )
 
         assert _cleanup_cursor(dry_run=False) is True
 
-        assert read_json(hooks_path)["hooks"]["stop"] == [{"command": "foreign"}]
+        assert read_json(hooks_path)["hooks"]["stop"] == [
+            {"command": "foreign"},
+            {"command": "python /home/me/tools/session_push.py"},
+        ]
 
     def test_cleanup_codex_preserves_foreign_groups(self, tmp_path: Path):
         hooks_path = tmp_path / ".codex/hooks.json"

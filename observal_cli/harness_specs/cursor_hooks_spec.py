@@ -23,6 +23,8 @@ Bump HOOKS_SPEC_VERSION whenever the hook definitions change.
 
 from __future__ import annotations
 
+import re
+
 from observal_cli.shared.launcher import module_command
 
 # Bump this when hook definitions change.
@@ -34,14 +36,20 @@ CURSOR_HOOK_EVENTS = ("beforeSubmitPrompt", "stop")
 # hooks.json file format version Cursor expects.
 CURSOR_HOOKS_FILE_VERSION = 1
 
-# Substring identifying the current Observal command inside a hook entry.
-_SESSION_PUSH_MARKER = "hooks.session_push --harness cursor"
+# Qualified name of the current session-push module. Matches both the ``-m``
+# launcher form and the Windows ``-c`` bootstrap, which embeds the same dotted
+# name inside ``runpy.run_module('observal_cli.hooks.session_push', ...)``.
+# The lookbehind keeps ``pkg.observal_cli...`` from matching.
+_CURRENT_PUSH_MODULE_RE = re.compile(r"(?<![\w.])observal_cli\.hooks\.session_push\b")
 
-# Substring identifying any Observal session-push command, current or legacy.
+# Qualified name of any Observal session-push module, current or legacy.
 # Covers the retired ``observal_cli.hooks.cursor_session_push`` module (still
 # listed in ``observal_cli.shared.utils``) along with every other
 # ``*_session_push`` variant so old installs are cleaned up and replaced.
-_SESSION_PUSH_MODULE_MARKER = "session_push"
+# Requiring the ``observal_cli.hooks.`` prefix keeps unrelated commands that
+# merely contain ``session_push`` (``python /home/me/tools/session_push.py``)
+# from being treated as Observal-owned and deleted.
+_SESSION_PUSH_MODULE_RE = re.compile(r"(?<![\w.])observal_cli\.hooks\.\w*session_push\b")
 
 
 def build_cursor_push_command() -> str:
@@ -65,25 +73,31 @@ def build_cursor_hooks() -> dict:
 def is_observal_hook_entry(entry: object) -> bool:
     """Return True when a hooks.json entry is an Observal session-push hook.
 
-    Matches the current ``session_push --harness cursor`` command and the
-    legacy ``cursor_session_push`` module so old installs are still cleaned
-    up. Unrelated entries are rejected.
+    Ownership is decided by the qualified ``observal_cli.hooks.`` module name,
+    covering the current ``session_push`` module and every legacy
+    ``*_session_push`` variant in either ``-m`` or ``-c`` bootstrap launcher
+    form. Commands that merely contain ``session_push`` without the package
+    prefix are user hooks and stay untouched.
     """
     if not isinstance(entry, dict):
         return False
-    return _SESSION_PUSH_MODULE_MARKER in str(entry.get("command", ""))
+    return _SESSION_PUSH_MODULE_RE.search(str(entry.get("command", ""))) is not None
 
 
 def is_current_push_hook_entry(entry: object) -> bool:
     """Return True when *entry* runs the current session-push command.
 
-    Stricter than :func:`is_observal_hook_entry`: legacy ``*_session_push``
-    variants count as Observal-owned but not current, so the patcher still
-    rewrites them.
+    Stricter than :func:`is_observal_hook_entry`: requires the qualified
+    ``observal_cli.hooks.session_push`` module together with ``--harness
+    cursor``, so legacy ``*_session_push`` variants count as Observal-owned
+    but not current, and the patcher still rewrites them. Module and flag are
+    matched separately because the ``-c`` bootstrap form does not place them
+    adjacent.
     """
     if not isinstance(entry, dict):
         return False
-    return _SESSION_PUSH_MARKER in str(entry.get("command", ""))
+    command = str(entry.get("command", ""))
+    return _CURRENT_PUSH_MODULE_RE.search(command) is not None and "--harness cursor" in command
 
 
 def merge_cursor_hooks(existing: dict | None) -> dict:
