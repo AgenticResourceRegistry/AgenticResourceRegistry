@@ -135,6 +135,7 @@
   * [observal doctor support](cli/support.md)
 * [observal self](cli/self.md)
 * [observal registry prompt](cli/prompt.md)
+* [observal registry sandbox](cli/sandbox.md)
 * observal server
   * [observal server](cli/server.md)
   * [observal server migrate](cli/migrate.md)
