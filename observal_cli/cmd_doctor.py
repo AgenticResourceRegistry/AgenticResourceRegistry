@@ -449,6 +449,8 @@ def _check_pi(issues: list, warnings: list):
 
 def _check_cursor(issues: list, warnings: list):
     """Check if Observal session push hooks are installed in Cursor."""
+    from observal_cli.harness_specs.cursor_hooks_spec import CURSOR_HOOK_EVENTS, is_current_push_hook_entry
+
     optic.debug("_check_cursor")
     hooks_path = Path.home() / ".cursor" / "hooks.json"
     if not (Path.home() / ".cursor").exists():
@@ -468,10 +470,10 @@ def _check_cursor(issues: list, warnings: list):
 
     hooks = data.get("hooks", {})
     has_session_push = False
-    for event in ("beforeSubmitPrompt", "stop"):
+    for event in CURSOR_HOOK_EVENTS:
         entries = hooks.get(event, [])
         for e in entries:
-            if "hooks.session_push --harness cursor" in e.get("command", ""):
+            if is_current_push_hook_entry(e):
                 has_session_push = True
                 break
 
@@ -1176,6 +1178,8 @@ def _cleanup_pi(dry_run: bool) -> bool:
 
 def _cleanup_cursor(dry_run: bool) -> bool:
     """Remove Observal hooks from ~/.cursor/hooks.json."""
+    from observal_cli.harness_specs.cursor_hooks_spec import is_observal_hook_entry
+
     rprint("[cyan]Cursor[/cyan]")
     hooks_path = Path.home() / ".cursor" / "hooks.json"
     if not hooks_path.exists():
@@ -1191,11 +1195,7 @@ def _cleanup_cursor(dry_run: bool) -> bool:
     for event, entries in list(hooks.items()):
         if not isinstance(entries, list):
             continue
-        cleaned = [
-            h
-            for h in entries
-            if "cursor_session_push" not in h.get("command", "") and "session_push" not in h.get("command", "")
-        ]
+        cleaned = [h for h in entries if not is_observal_hook_entry(h)]
         if len(cleaned) < len(entries):
             removed_events.append(f"{event} ({len(entries) - len(cleaned)} removed)")
             if not dry_run:
@@ -1592,20 +1592,11 @@ def _patch_cursor(dry_run: bool) -> bool:
         rprint("  [dim]No ~/.cursor/ directory - skipping[/dim]")
         return False
 
-    # Use the current interpreter (from the observal CLI's venv) so that
-    # httpx and other dependencies are available when Cursor fires the hook,
-    # with PYTHONPATH when it cannot import observal_cli on its own.
-    from observal_cli.shared.launcher import module_command
-
-    cmd = f"{module_command('observal_cli.hooks.session_push')} --harness cursor"
-
-    desired = {
-        "version": 1,
-        "hooks": {
-            "beforeSubmitPrompt": [{"command": cmd, "type": "command"}],
-            "stop": [{"command": cmd, "type": "command"}],
-        },
-    }
+    from observal_cli.harness_specs.cursor_hooks_spec import (
+        CURSOR_HOOK_EVENTS,
+        is_current_push_hook_entry,
+        merge_cursor_hooks,
+    )
 
     # Load existing hooks.json if present
     existing = {}
@@ -1616,9 +1607,9 @@ def _patch_cursor(dry_run: bool) -> bool:
     existing_hooks = existing.get("hooks", {})
     needs_update = False
 
-    for event in ("beforeSubmitPrompt", "stop"):
+    for event in CURSOR_HOOK_EVENTS:
         entries = existing_hooks.get(event, [])
-        has_observal = any("hooks.session_push --harness cursor" in e.get("command", "") for e in entries)
+        has_observal = any(is_current_push_hook_entry(e) for e in entries)
         if not has_observal:
             needs_update = True
             break
@@ -1628,18 +1619,7 @@ def _patch_cursor(dry_run: bool) -> bool:
         return False
 
     # Merge: keep existing non-Observal hooks, add ours
-    merged_hooks = existing_hooks.copy()
-    for event, desired_entries in desired["hooks"].items():
-        current = merged_hooks.get(event, [])
-        # Remove old Observal hooks
-        cleaned = [
-            h
-            for h in current
-            if "cursor_session_push" not in h.get("command", "") and "session_push" not in h.get("command", "")
-        ]
-        merged_hooks[event] = cleaned + desired_entries
-
-    result = {"version": 1, "hooks": merged_hooks}
+    result = merge_cursor_hooks(existing)
 
     if not dry_run:
         atomic_write(hooks_path, json.dumps(result, indent=2) + "\n")

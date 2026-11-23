@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from observal_cli.harness_specs import claude_code_hooks_spec, kiro_hooks_spec
+from observal_cli.harness_specs import claude_code_hooks_spec, cursor_hooks_spec, kiro_hooks_spec
 from observal_cli.shared.utils import is_observal_hook_entry, is_observal_matcher_group
 
 
@@ -86,3 +86,124 @@ def test_kiro_build_hooks_with_agent_id():
     hooks = kiro_hooks_spec.build_kiro_hooks(agent_id="test-agent")
     cmd = hooks["userPromptSubmit"][0]["command"]
     assert "OBSERVAL_AGENT_ID=test-agent" in cmd or 'set "OBSERVAL_AGENT_ID=test-agent"' in cmd
+
+
+def test_cursor_hooks_spec_version_is_string():
+    version = cursor_hooks_spec.HOOKS_SPEC_VERSION
+    assert isinstance(version, str)
+    assert version.isdigit()
+
+
+def test_cursor_build_hooks_has_expected_events():
+    desired = cursor_hooks_spec.build_cursor_hooks()
+    assert desired["version"] == 1
+    assert set(desired["hooks"]) == {"beforeSubmitPrompt", "stop"}
+    for event, entries in desired["hooks"].items():
+        assert len(entries) == 1
+        assert entries[0]["type"] == "command"
+        assert "observal_cli.hooks.session_push" in entries[0]["command"]
+        assert "--harness cursor" in entries[0]["command"]
+
+
+def test_cursor_is_observal_hook_entry_matches_current_and_legacy():
+    assert cursor_hooks_spec.is_observal_hook_entry(
+        {"type": "command", "command": "python -m observal_cli.hooks.session_push --harness cursor"}
+    )
+    assert cursor_hooks_spec.is_observal_hook_entry(
+        {"type": "command", "command": "python -m observal_cli.hooks.cursor_session_push"}
+    )
+
+
+def test_cursor_is_observal_hook_entry_matches_bootstrap_command():
+    """The Windows ``-c`` bootstrap launcher counts as Observal-owned."""
+    bootstrap = (
+        '"C:/Python312/python.exe" -I -c "import sys;sys.path.insert(0,bytes.fromhex(\'2e\').decode());'
+        "import runpy;runpy.run_module('observal_cli.hooks.cursor_session_push',run_name='__main__',alter_sys=True)\""
+    )
+    assert cursor_hooks_spec.is_observal_hook_entry({"type": "command", "command": bootstrap})
+
+
+def test_cursor_is_observal_hook_entry_rejects_foreign():
+    assert not cursor_hooks_spec.is_observal_hook_entry({"type": "command", "command": "some-other-script.sh"})
+    assert not cursor_hooks_spec.is_observal_hook_entry({"type": "command"})
+    assert not cursor_hooks_spec.is_observal_hook_entry("not-a-dict")
+
+
+def test_cursor_is_observal_hook_entry_rejects_unqualified_session_push():
+    """Commands merely containing ``session_push`` are not Observal-owned."""
+    assert not cursor_hooks_spec.is_observal_hook_entry(
+        {"type": "command", "command": "python /home/me/tools/session_push.py"}
+    )
+    assert not cursor_hooks_spec.is_observal_hook_entry({"type": "command", "command": "session_push --run"})
+    assert not cursor_hooks_spec.is_observal_hook_entry(
+        {"type": "command", "command": "python -m mypkg.observal_cli.hooks.session_push"}
+    )
+
+
+def test_cursor_is_current_push_hook_entry_distinguishes_legacy():
+    assert cursor_hooks_spec.is_current_push_hook_entry(
+        {"type": "command", "command": "python -m observal_cli.hooks.session_push --harness cursor"}
+    )
+    assert not cursor_hooks_spec.is_current_push_hook_entry(
+        {"type": "command", "command": "python -m observal_cli.hooks.cursor_session_push"}
+    )
+    assert not cursor_hooks_spec.is_current_push_hook_entry(
+        {"type": "command", "command": "python -m observal_cli.hooks.session_push"}
+    )
+    assert not cursor_hooks_spec.is_current_push_hook_entry({"type": "command", "command": "foreign"})
+
+
+def test_cursor_is_current_push_hook_entry_matches_bootstrap_command():
+    """The ``-c`` bootstrap form is current: module and flag are not adjacent."""
+    bootstrap = (
+        '"C:/Python312/python.exe" -I -c "import runpy;'
+        "runpy.run_module('observal_cli.hooks.session_push',run_name='__main__',alter_sys=True)\" --harness cursor"
+    )
+    assert cursor_hooks_spec.is_current_push_hook_entry({"type": "command", "command": bootstrap})
+
+
+def test_cursor_merge_hooks_preserves_foreign_and_replaces_observal():
+    existing = {
+        "version": 1,
+        "hooks": {
+            "beforeSubmitPrompt": [
+                {"command": "foreign", "type": "command"},
+                {"command": "python -m observal_cli.hooks.cursor_session_push", "type": "command"},
+            ],
+            "userHook": [{"command": "keep-me", "type": "command"}],
+        },
+    }
+    merged = cursor_hooks_spec.merge_cursor_hooks(existing)
+
+    assert merged["version"] == 1
+    before = merged["hooks"]["beforeSubmitPrompt"]
+    assert {"command": "foreign", "type": "command"} in before
+    observal_entries = [e for e in before if cursor_hooks_spec.is_observal_hook_entry(e)]
+    assert observal_entries == cursor_hooks_spec.build_cursor_hooks()["hooks"]["beforeSubmitPrompt"]
+    assert merged["hooks"]["userHook"] == [{"command": "keep-me", "type": "command"}]
+    # Idempotent: merging the result again changes nothing.
+    assert cursor_hooks_spec.merge_cursor_hooks(merged) == merged
+
+
+def test_cursor_merge_hooks_preserves_unqualified_session_push_command():
+    """A user hook whose command contains ``session_push`` is kept, not deleted."""
+    foreign = {"command": "python /home/me/tools/session_push.py", "type": "command"}
+    existing = {
+        "version": 1,
+        "hooks": {
+            "beforeSubmitPrompt": [dict(foreign)],
+            "stop": [
+                dict(foreign),
+                {"command": "python -m observal_cli.hooks.cursor_session_push", "type": "command"},
+            ],
+        },
+    }
+    merged = cursor_hooks_spec.merge_cursor_hooks(existing)
+    assert foreign in merged["hooks"]["beforeSubmitPrompt"]
+    assert foreign in merged["hooks"]["stop"]
+    assert merged["hooks"]["stop"][-1] == cursor_hooks_spec.build_cursor_hooks()["hooks"]["stop"][0]
+
+
+def test_cursor_merge_hooks_builds_file_from_empty():
+    merged = cursor_hooks_spec.merge_cursor_hooks(None)
+    assert merged == cursor_hooks_spec.build_cursor_hooks()
