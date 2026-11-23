@@ -149,6 +149,43 @@ def _listing_mock(status=ListingStatus.approved, submitted_by=None, is_private=F
     return m
 
 
+def _assert_detail_body(r, listing, *, permission):
+    """A 200 must serialize the resolved listing for this caller, not just succeed.
+
+    A bare ``status_code == 200`` passes even if the route returns the wrong row
+    or an empty payload. Checking identity fields, the caller-facing status, and
+    ``user_permission`` fails the test if the gate admits the wrong caller or the
+    serializer hides the listing.
+    """
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == str(listing.id)
+    assert body["name"] == listing.name
+    assert body["namespace"] == listing.namespace
+    assert body["slug"] == listing.slug
+    assert body["qualified_name"] == listing.qualified_name
+    assert body["version"] == listing.version
+    assert body["description"] == listing.description
+    assert body["owner"] == listing.owner
+    assert body["status"] == listing.status.value
+    assert body["submitted_by"] == str(listing.submitted_by)
+    assert body["is_private"] == listing.is_private
+    assert body["visibility"] == listing.visibility
+    assert body["fork_count"] == 0
+    assert body["forked_from"] is None
+    assert body["user_permission"] == permission
+
+
+def _assert_listing_not_found(r):
+    """A denied listing must be indistinguishable from a nonexistent one.
+
+    Any other detail body (or a 403) would confirm the listing exists to a
+    caller who is not meant to learn that.
+    """
+    assert r.status_code == 404
+    assert r.json() == {"detail": "Listing not found"}
+
+
 @pytest.fixture(autouse=True)
 def mock_selected_skill_version(monkeypatch):
     """These listing-scope tests mock the listing lookup, not version-row locks.
@@ -220,7 +257,13 @@ class TestUnauthenticatedAccess:
             mock_resolve.return_value = listing
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{listing.id}")
-            assert r.status_code == 200
+
+        _assert_detail_body(r, listing, permission="view")
+        if route_type != "skill":
+            # Non-skill routes resolve approved listings through the
+            # require_status=approved fast path in a single lookup.
+            first_call = mock_resolve.await_args_list[0]
+            assert first_call.kwargs["require_status"] == ListingStatus.approved
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -236,7 +279,7 @@ class TestUnauthenticatedAccess:
             mock_resolve.side_effect = [None, listing]
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{listing.id}")
-            assert r.status_code == 404
+            _assert_listing_not_found(r)
 
     @pytest.mark.asyncio
     async def test_nonexistent_returns_404(self, route_type, base_path):
@@ -247,7 +290,7 @@ class TestUnauthenticatedAccess:
             mock_resolve.side_effect = [None, None]
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{uuid.uuid4()}")
-            assert r.status_code == 404
+            _assert_listing_not_found(r)
 
 
 @pytest.mark.parametrize("route_type,base_path", ENDPOINTS)
@@ -272,7 +315,8 @@ class TestOwnerAccess:
                 mock_resolve.side_effect = [None, listing]
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{listing.id}")
-            assert r.status_code == 200
+
+        _assert_detail_body(r, listing, permission="owner")
 
 
 @pytest.mark.parametrize("route_type,base_path", ENDPOINTS)
@@ -294,7 +338,7 @@ class TestNonOwnerRegularUser:
             mock_resolve.side_effect = [None, listing]
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{listing.id}")
-            assert r.status_code == 404
+            _assert_listing_not_found(r)
 
     @pytest.mark.asyncio
     async def test_sees_approved(self, route_type, base_path):
@@ -307,7 +351,8 @@ class TestNonOwnerRegularUser:
             mock_resolve.return_value = listing
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{listing.id}")
-            assert r.status_code == 200
+
+        _assert_detail_body(r, listing, permission="view")
 
 
 @pytest.mark.parametrize("route_type,base_path", ENDPOINTS)
@@ -328,7 +373,9 @@ class TestPrivilegedAccess:
                 mock_resolve.side_effect = [None, listing]
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{listing.id}")
-            assert r.status_code == 200
+
+        # A reviewer reads the review queue but never gains edit rights on it.
+        _assert_detail_body(r, listing, permission="view")
 
     @pytest.mark.asyncio
     async def test_admin_sees_draft(self, route_type, base_path):
@@ -344,7 +391,8 @@ class TestPrivilegedAccess:
                 mock_resolve.side_effect = [None, listing]
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{listing.id}")
-            assert r.status_code == 200
+
+        _assert_detail_body(r, listing, permission="owner")
 
 
 # ── Privacy is a different axis from status ──────────────
@@ -369,15 +417,15 @@ class TestTeamPrivateAccess:
         with patch(RESOLVE_SEAM, new_callable=AsyncMock) as mock_resolve:
             mock_resolve.return_value = listing
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-                return await ac.get(f"{base_path}/{listing.id}")
+                return await ac.get(f"{base_path}/{listing.id}"), listing
 
     @pytest.mark.asyncio
     async def test_global_reviewer_outside_the_team_is_denied(self, route_type, base_path):
         reviewer = _user(role=UserRole.reviewer)
 
-        r = await self._get(route_type, base_path, reviewer, membership=None)
+        r, _ = await self._get(route_type, base_path, reviewer, membership=None)
 
-        assert r.status_code == 404
+        _assert_listing_not_found(r)
 
     @pytest.mark.asyncio
     async def test_global_reviewer_outside_the_team_is_denied_for_pending_too(self, route_type, base_path):
@@ -388,31 +436,34 @@ class TestTeamPrivateAccess:
         """
         reviewer = _user(role=UserRole.reviewer)
 
-        r = await self._get(route_type, base_path, reviewer, membership=None, status=ListingStatus.pending)
+        r, _ = await self._get(route_type, base_path, reviewer, membership=None, status=ListingStatus.pending)
 
-        assert r.status_code == 404
+        _assert_listing_not_found(r)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("role", [UserRole.admin, UserRole.super_admin])
     async def test_admins_still_read_it(self, route_type, base_path, role):
-        r = await self._get(route_type, base_path, _user(role=role), membership=None)
+        r, listing = await self._get(route_type, base_path, _user(role=role), membership=None)
 
-        assert r.status_code == 200
+        _assert_detail_body(r, listing, permission="owner")
+        assert r.json()["team_id"] == str(listing.team_id)
 
     @pytest.mark.asyncio
     async def test_team_member_reads_it(self, route_type, base_path):
-        r = await self._get(route_type, base_path, _user(), membership=uuid.uuid4())
+        r, listing = await self._get(route_type, base_path, _user(), membership=uuid.uuid4())
 
-        assert r.status_code == 200
+        _assert_detail_body(r, listing, permission="view")
+        assert r.json()["is_private"] is True
+        assert r.json()["visibility"] == "team"
 
     @pytest.mark.asyncio
     async def test_reviewer_who_is_a_team_member_reads_it(self, route_type, base_path):
         """Membership admits the reviewer; the global role never did."""
         reviewer = _user(role=UserRole.reviewer)
 
-        r = await self._get(route_type, base_path, reviewer, membership=uuid.uuid4())
+        r, listing = await self._get(route_type, base_path, reviewer, membership=uuid.uuid4())
 
-        assert r.status_code == 200
+        _assert_detail_body(r, listing, permission="view")
 
     @pytest.mark.asyncio
     async def test_reviewer_still_reads_a_pending_public_listing(self, route_type, base_path):
@@ -430,4 +481,4 @@ class TestTeamPrivateAccess:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{listing.id}")
 
-        assert r.status_code == 200
+        _assert_detail_body(r, listing, permission="view")
