@@ -6,6 +6,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Thirumalesh <thirumaleshpinninti@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Table of contents
@@ -150,6 +151,7 @@
 * [API endpoints](reference/api-endpoints.md)
 * [Hooks specification](reference/hooks-spec.md)
 * [Config files](reference/config-files.md)
+* [observal-agents MCP server](reference/observal-agents-mcp.md)
 
 ### Architecture Decisions
 
