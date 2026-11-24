@@ -220,7 +220,8 @@
               "reference/environment-variables",
               "reference/api-endpoints",
               "reference/hooks-spec",
-              "reference/config-files"
+              "reference/config-files",
+              "reference/observal-agents-mcp"
             ]
           },
           {
