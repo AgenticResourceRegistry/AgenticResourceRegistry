@@ -1420,6 +1420,38 @@ def test_registered_name_helpers_filter_empty_names(monkeypatch, function_name, 
 
 
 @pytest.mark.parametrize("function_name", ["get_registered_agent_names", "get_registered_mcp_names"])
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        httpx.ConnectError("unavailable"),
+        httpx.InvalidURL("Invalid port"),
+        _response(200, text="not json"),
+        _response(200, data=["alpha"]),
+    ],
+)
+def test_registered_name_helpers_log_and_fail_open(monkeypatch, function_name, outcome):
+    get = MagicMock()
+    if isinstance(outcome, Exception):
+        get.side_effect = outcome
+    else:
+        get.return_value = outcome
+    monkeypatch.setattr(
+        client.config,
+        "load",
+        lambda: {"server_url": "https://registry.example.test", "access_token": "fake-access-token"},
+    )
+    monkeypatch.setattr(client.httpx, "get", get)
+    monkeypatch.setattr(client, "optic", MagicMock())
+
+    assert getattr(client, function_name)() == set()
+    client.optic.debug.assert_called_once()
+    message, error = client.optic.debug.call_args.args
+    assert message.endswith("name lookup failed: error={}")
+    assert isinstance(error, Exception)
+    assert "fake-access-token" not in repr(client.optic.debug.call_args_list)
+
+
+@pytest.mark.parametrize("function_name", ["get_registered_agent_names", "get_registered_mcp_names"])
 @pytest.mark.parametrize("failure", ["missing-config", "bad-status", "connection"])
 def test_registered_name_helpers_fail_open(monkeypatch, function_name, failure):
     if failure == "missing-config":

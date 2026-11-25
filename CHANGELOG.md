@@ -47,6 +47,7 @@ All notable changes to this project will be documented in this file.
 - install and refresh array-based Kiro registry hook files without duplicating named entries or replacing unrelated hooks (#2020)
 - detect Kiro V3 reasoning models and durably upload companion model metadata as a fallback without changing source counts (#2023)
 - measure Kiro V3 sessions and retain assistant text, tool inputs and failures in both Kiro transcript formats; refresh Kiro-only facet caches (#2022)
+- log a debug message instead of silently swallowing errors when the CLI looks up registered agent and MCP names (#2099)
 
 - repair in-app help links that still point at the renamed core concepts doc
 - correct the README quickstart to use `observal doctor patch`
