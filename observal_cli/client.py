@@ -859,7 +859,7 @@ def get_registered_agent_names() -> set[str]:
         if r.status_code == 200:
             return {item.get("name", "") for item in r.json() if item.get("name")}
     except (httpx.HTTPError, httpx.InvalidURL, ValueError, TypeError, AttributeError) as exc:
-        optic.debug("registered agent name lookup failed: error={}", exc)
+        optic.debug("registered agent name lookup failed: error={}", type(exc).__name__)
     return set()
 
 
@@ -882,7 +882,7 @@ def get_registered_mcp_names() -> set[str]:
         if r.status_code == 200:
             return {item.get("name", "") for item in r.json() if item.get("name")}
     except (httpx.HTTPError, httpx.InvalidURL, ValueError, TypeError, AttributeError) as exc:
-        optic.debug("registered MCP name lookup failed: error={}", exc)
+        optic.debug("registered MCP name lookup failed: error={}", type(exc).__name__)
     return set()
 
 

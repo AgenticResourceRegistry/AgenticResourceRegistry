@@ -1447,8 +1447,38 @@ def test_registered_name_helpers_log_and_fail_open(monkeypatch, function_name, o
     client.optic.debug.assert_called_once()
     message, error = client.optic.debug.call_args.args
     assert message.endswith("name lookup failed: error={}")
-    assert isinstance(error, Exception)
+    assert isinstance(error, str)
+    if isinstance(outcome, Exception):
+        assert error == type(outcome).__name__
     assert "fake-access-token" not in repr(client.optic.debug.call_args_list)
+
+
+@pytest.mark.parametrize("function_name", ["get_registered_agent_names", "get_registered_mcp_names"])
+def test_registered_name_helpers_do_not_log_exception_message(monkeypatch, function_name):
+    from loguru import logger
+
+    token = "secret-token-value\n"
+    monkeypatch.setattr(
+        client.config,
+        "load",
+        lambda: {"server_url": "https://registry.example.test", "access_token": token},
+    )
+    monkeypatch.setattr(
+        client.httpx,
+        "get",
+        MagicMock(side_effect=httpx.LocalProtocolError(f"Illegal header value b'Bearer {token}'")),
+    )
+    monkeypatch.setattr(client, "optic", logger)
+    records = []
+    sink_id = logger.add(records.append, level="DEBUG", format="{message}")
+    try:
+        assert getattr(client, function_name)() == set()
+    finally:
+        logger.remove(sink_id)
+
+    output = "".join(records)
+    assert "LocalProtocolError" in output
+    assert "secret-token-value" not in output
 
 
 @pytest.mark.parametrize("function_name", ["get_registered_agent_names", "get_registered_mcp_names"])
