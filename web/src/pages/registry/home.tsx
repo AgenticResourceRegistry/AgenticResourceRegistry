@@ -1,19 +1,24 @@
+
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+// SPDX-FileCopyrightText: 2026 PhanNhung-onn <nhungb2306677@student.ctu.edu.vn>
 // SPDX-License-Identifier: Apache-2.0
 
 import { Link, useRouter } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowDownToLine,
   ArrowRight,
   Blocks,
   Bot,
+  Check,
+  Copy,
   Star,
   Terminal,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/layouts/page-header";
 import { RecommendedForYou } from "@/components/registry/recommended-for-you";
 import { RegistryName } from "@/components/registry/registry-name";
@@ -39,7 +44,7 @@ import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { hasMinRole } from "@/hooks/use-role-guard";
 import { getUserRole } from "@/lib/api";
 import { registryItemPath } from "@/lib/registry-name";
-import { compactNumber } from "@/lib/utils";
+import { compactNumber, copyToClipboard } from "@/lib/utils";
 import type { RegistryItem, Session, TopAgentItem } from "@/lib/types";
 
 const TIME_FORMATTER = new Intl.DateTimeFormat("en", {
@@ -53,6 +58,14 @@ const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en", {
   hour: "numeric",
   minute: "2-digit",
 });
+
+const INSTALL_COMMAND = "uv tool install observal-cli";
+
+const CLI_COMMANDS = [
+  INSTALL_COMMAND,
+  "observal agent list",
+  "observal pull namespace/agent --harness pi",
+];
 
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -91,6 +104,36 @@ function sessionPlatform(session: Session): string {
 
 export default function RegistryHome() {
   const [search, setSearch] = useState("");
+  const [copiedCommand, setCopiedCommand] = useState<number | null>(null);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current !== null) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleCopyCommand = async (command: string, index: number) => {
+    try {
+      await copyToClipboard(command);
+
+      if (copyTimeoutRef.current !== null) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+
+      setCopiedCommand(index);
+
+      copyTimeoutRef.current = setTimeout(() => {
+        setCopiedCommand(null);
+        copyTimeoutRef.current = null;
+      }, 2000);
+    } catch {
+      setCopiedCommand(null);
+    }
+  };
+
   const router = useRouter();
   const { isAuthenticated } = useOptionalAuth();
   const { data: whoami } = useWhoami(isAuthenticated);
@@ -155,7 +198,6 @@ export default function RegistryHome() {
       />
 
       <div className="page-body w-full">
-        {/* ── Guest CLI banner ── */}
         {!isAuthenticated && (
           <section
             aria-labelledby="guest-cli-title"
@@ -175,29 +217,52 @@ export default function RegistryHome() {
               </div>
             </div>
             <ol className="mt-5 grid gap-4 text-sm md:grid-cols-3">
-              <li className="min-w-0">
-                <p className="mb-1.5 font-medium text-foreground">1. Install the CLI</p>
-                <code className="block overflow-x-auto whitespace-nowrap rounded-md bg-background px-3 py-2 font-mono text-xs text-foreground">
-                  uv tool install observal-cli
-                </code>
-              </li>
-              <li className="min-w-0">
-                <p className="mb-1.5 font-medium text-foreground">2. Find an Agent File</p>
-                <code className="block overflow-x-auto whitespace-nowrap rounded-md bg-background px-3 py-2 font-mono text-xs text-foreground">
-                  observal agent list
-                </code>
-              </li>
-              <li className="min-w-0">
-                <p className="mb-1.5 font-medium text-foreground">3. Pull it into your harness</p>
-                <code className="block overflow-x-auto whitespace-nowrap rounded-md bg-background px-3 py-2 font-mono text-xs text-foreground">
-                  observal pull namespace/agent --harness pi
-                </code>
-              </li>
+              {CLI_COMMANDS.map((command, index) => {
+                const copied = copiedCommand === index;
+
+                const titles = [
+                  "1. Install the CLI",
+                  "2. Find an Agent File",
+                  "3. Pull it into your harness",
+                ];
+
+                return (
+                  <li key={command} className="min-w-0">
+                    <p className="mb-1.5 font-medium text-foreground">
+                      {titles[index]}
+                    </p>
+                    <div className="flex min-w-0 items-center gap-1">
+                      <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-background px-3 py-2 font-mono text-xs text-foreground">
+                        {command}
+                      </code>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 shrink-0 px-2"
+                        onClick={() => handleCopyCommand(command, index)}
+                        aria-label={copied ? "Command copied" : `Copy command ${index + 1}`}
+                      >
+                        {copied ? (
+                          <>
+                            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                            Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                            Copy
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
             </ol>
           </section>
         )}
 
-        {/* ── Intent box ── */}
         <section className="mb-[22px] rounded-xl bg-card p-[30px] shadow-sm animate-in">
           <h2 className="max-w-[670px] text-balance text-[clamp(24px,3vw,38px)] font-semibold tracking-[-0.02em]">
             What are you working on?
@@ -227,9 +292,7 @@ export default function RegistryHome() {
           </nav>
         </section>
 
-        {/* ── Main grid ── */}
         <RegistryHomeGrid>
-          {/* Recommendations */}
           <div className="col-span-full xl:col-span-1">
             {isAuthenticated ? (
               <RecommendedForYou limit={3} />
@@ -275,7 +338,6 @@ export default function RegistryHome() {
             )}
           </div>
 
-          {/* Your work */}
           <Panel
             title={isAuthenticated ? "Your work" : "Start exploring"}
             subtitle={isAuthenticated ? "Publishing and maintenance that needs you" : "Browse the public catalog without signing in."}
@@ -329,89 +391,87 @@ export default function RegistryHome() {
             />
           </Panel>
 
-          {/* Agents gaining adoption */}
           {(isAuthenticated || topAgentsLoading || agentsLoading || Boolean(topAgents?.length) || Boolean(agentsError) || trustedAgents.length > 0) && (
-          <Panel
-            title={
-              topAgents?.length
-                ? "Agent Files gaining adoption"
-                : "Trusted Agent Files"
-            }
-            subtitle={
-              topAgents?.length
-                ? "Frequently installed Agent Files from across the registry"
-                : "Approved Agent Files available to install now."
-            }
-            action={
-              leaderboardEnabled ? (
-                <Link
-                  to="/leaderboard"
-                  className="text-2xs font-medium text-muted-foreground hover:text-foreground"
-                >
-                  Leaderboard →
-                </Link>
-              ) : undefined
-            }
-            wide
-          >
-            {topAgentsLoading || agentsLoading ? (
-              <TableSkeleton rows={3} cols={3} />
-            ) : topAgents?.length ? (
-              topAgents.slice(0, 3).map((agent) => (
-                <CompactRow
-                  key={agent.id}
-                  icon={<EntityGlyph type="agent" size="sm" labelled={false} />}
-                  title={
-                    agent.namespace && agent.slug
-                      ? `${agent.namespace}/${agent.slug}`
-                      : agent.name
-                  }
-                  description={agent.description}
-                  meta={
-                    <>
-                      {compactNumber(agent.download_count)} pulls
-                      <br />★{" "}
-                      {agent.average_rating
-                        ? agent.average_rating.toFixed(1)
-                        : "New"}
-                    </>
-                  }
-                  href={registryItemPath(agent, "agents", agent.id)}
+            <Panel
+              title={
+                topAgents?.length
+                  ? "Agent Files gaining adoption"
+                  : "Trusted Agent Files"
+              }
+              subtitle={
+                topAgents?.length
+                  ? "Frequently installed Agent Files from across the registry"
+                  : "Approved Agent Files available to install now."
+              }
+              action={
+                leaderboardEnabled ? (
+                  <Link
+                    to="/leaderboard"
+                    className="text-2xs font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    Leaderboard →
+                  </Link>
+                ) : undefined
+              }
+              wide
+            >
+              {topAgentsLoading || agentsLoading ? (
+                <TableSkeleton rows={3} cols={3} />
+              ) : topAgents?.length ? (
+                topAgents.slice(0, 3).map((agent) => (
+                  <CompactRow
+                    key={agent.id}
+                    icon={<EntityGlyph type="agent" size="sm" labelled={false} />}
+                    title={
+                      agent.namespace && agent.slug
+                        ? `${agent.namespace}/${agent.slug}`
+                        : agent.name
+                    }
+                    description={agent.description}
+                    meta={
+                      <>
+                        {compactNumber(agent.download_count)} pulls
+                        <br />★{" "}
+                        {agent.average_rating
+                          ? agent.average_rating.toFixed(1)
+                          : "New"}
+                      </>
+                    }
+                    href={registryItemPath(agent, "agents", agent.id)}
+                  />
+                ))
+              ) : agentsError ? (
+                <ErrorState
+                  message={agentsErrorDetail?.message}
+                  onRetry={() => refetchAgents()}
                 />
-              ))
-            ) : agentsError ? (
-              <ErrorState
-                message={agentsErrorDetail?.message}
-                onRetry={() => refetchAgents()}
-              />
-            ) : trustedAgents.length > 0 ? (
-              trustedAgents.slice(0, 3).map((agent) => (
-                <CompactRow
-                  key={agent.id}
-                  icon={<EntityGlyph type="agent" size="sm" labelled={false} />}
-                  title={
-                    agent.namespace && agent.slug
-                      ? `${agent.namespace}/${agent.slug}`
-                      : agent.name
-                  }
-                  description={
-                    typeof agent.description === "string"
-                      ? agent.description
-                      : "Approved Agent File"
-                  }
-                  href={registryItemPath(agent, "agents", agent.id)}
-                />
-              ))
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Approved Agent Files will appear here when your registry starts
-                publishing.
-              </p>
-            )}
-          </Panel>
+              ) : trustedAgents.length > 0 ? (
+                trustedAgents.slice(0, 3).map((agent) => (
+                  <CompactRow
+                    key={agent.id}
+                    icon={<EntityGlyph type="agent" size="sm" labelled={false} />}
+                    title={
+                      agent.namespace && agent.slug
+                        ? `${agent.namespace}/${agent.slug}`
+                        : agent.name
+                    }
+                    description={
+                      typeof agent.description === "string"
+                        ? agent.description
+                        : "Approved Agent File"
+                    }
+                    href={registryItemPath(agent, "agents", agent.id)}
+                  />
+                ))
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Approved Agent Files will appear here when your registry starts
+                  publishing.
+                </p>
+              )}
+            </Panel>
           )}
 
-          {/* Recent execution / More public agents */}
           <Panel
             title={isAuthenticated ? "Recent execution" : "More public Agent Files"}
             subtitle={isAuthenticated ? "Your latest captured coding sessions" : "Recently approved Agent Files from the public registry."}
