@@ -130,6 +130,11 @@ async def clickhouse_health() -> bool:
         return False
 
 
+def string_array_param(values) -> str:
+    """Encode strings as a ClickHouse ``Array(String)`` query parameter value."""
+    return "[" + ",".join("'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'" for value in values) + "]"
+
+
 def _now_ms() -> str:
     """Current UTC timestamp as ISO string with millisecond precision."""
     return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]

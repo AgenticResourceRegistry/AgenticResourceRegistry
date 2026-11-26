@@ -23,16 +23,18 @@ import xxhash
 from loguru import logger as optic
 
 from services.clickhouse import (
+    clear_session_event_tokens,
     insert_session_checkpoint,
     insert_session_events,
     query_existing_for_dedup,
+    query_response_token_rows,
     query_session_checkpoint,
     query_session_source_manifest,
     query_source_records_after,
     refresh_session_summary,
 )
 from services.secrets_redactor import redact_secrets
-from services.session_parsers.base import token_count, uncached_input_tokens
+from services.session_parsers.base import dict_field, str_field, token_count, uncached_input_tokens
 from services.session_parsers.ingest_classify import extract_timestamp, get_classifier, get_extra_rows
 from services.session_parsers.kiro import extract_usage as _usage_kiro
 
@@ -246,6 +248,90 @@ def _extract_uuid(parsed: dict, harness: str = "claude-code") -> tuple[str | Non
     """
     extractor = _UUID_EXTRACTORS.get(harness, _uuid_default)
     return extractor(parsed)
+
+
+# ---------------------------------------------------------------------------
+# Per-harness API response identity (dispatch pattern)
+# ---------------------------------------------------------------------------
+
+
+def _response_key_claude_code(parsed: dict) -> str:
+    """Claude Code / Cursor / OpenCode: ``message.id`` plus the top-level ``requestId``.
+
+    Claude Code writes one line per content block (thinking, text, tool use) and
+    every line repeats the whole response's usage, so lines sharing this key are
+    one API response whose tokens must be counted once.
+    """
+    message_id = str_field(dict_field(parsed, "message"), "id")
+    if not message_id:
+        return ""
+    request_id = str_field(parsed, "requestId")
+    return f"{message_id}:{request_id}" if request_id else message_id
+
+
+_RESPONSE_KEY_EXTRACTORS: dict[str, Callable[[dict], str]] = {
+    "claude-code": _response_key_claude_code,
+    "cursor": _response_key_claude_code,
+    "opencode": _response_key_claude_code,
+}
+
+
+def _extract_response_key(parsed: dict, harness: str) -> str:
+    """Return the API response a line belongs to, or "" when each line is its own response."""
+    extractor = _RESPONSE_KEY_EXTRACTORS.get(harness)
+    return extractor(parsed) if extractor and parsed else ""
+
+
+_TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+
+
+async def _count_each_response_once(
+    rows: list[dict],
+    session_id: str,
+    project_id: str,
+    user_id: str,
+    harness: str,
+) -> list[int]:
+    """Leave each API response's tokens on one row and return stored offsets to clear.
+
+    The rendered line with the largest output count carries the response's usage
+    (streaming lines can hold partial counts; the first wins a tie) and every
+    other line of it is written with zero tokens. A response split across pushes
+    is settled against the rows already stored for the session: the stored row
+    keeps the tokens unless a new line reports more output, in which case the
+    stored row is returned so the caller can clear it.
+    """
+    responses: dict[str, list[dict]] = {}
+    for row in rows:
+        if not row["response_key"]:
+            continue
+        if row["rendered"] == 1:
+            responses.setdefault(row["response_key"], []).append(row)
+        else:
+            row.update(dict.fromkeys(_TOKEN_FIELDS, 0))
+    if not responses:
+        return []
+
+    rewritten = {row["line_offset"] for row in rows}
+    stored: dict[str, list[tuple[int, int]]] = {}
+    for line_offset, key, output_tokens in await query_response_token_rows(
+        session_id, project_id, user_id, harness, list(responses)
+    ):
+        if line_offset not in rewritten:
+            stored.setdefault(key, []).append((line_offset, output_tokens))
+
+    superseded: list[int] = []
+    for key, candidates in responses.items():
+        carrier: dict | None = max(candidates, key=lambda row: row["output_tokens"])
+        previous = stored.get(key, [])
+        if previous and max(output for _, output in previous) >= carrier["output_tokens"]:
+            carrier = None
+        else:
+            superseded.extend(line_offset for line_offset, _ in previous)
+        for row in candidates:
+            if row is not carrier:
+                row.update(dict.fromkeys(_TOKEN_FIELDS, 0))
+    return superseded
 
 
 # ---------------------------------------------------------------------------
@@ -562,14 +648,19 @@ async def ingest_session_lines(
                 "raw_line": redact_secrets(raw_line.encode("utf-8", errors="replace").decode("utf-8")),
                 "credits": 0.0,
                 "parent_session_id": parent_session_id,
+                "response_key": _extract_response_key(parsed, harness),
                 **usage,
             }
         )
         ingested += rendered
 
+    superseded = await _count_each_response_once(rows, session_id, project_id, user_id, harness)
     if rows:
         await insert_session_events(rows)
         optic.debug("inserted {} canonical rows for session={}", len(rows), session_id)
+    if superseded:
+        # After the insert, so a failure here leaves the response over-counted until the retry, never lost.
+        await clear_session_event_tokens(session_id, project_id, user_id, harness, superseded)
 
     extra = get_extra_rows(
         harness, session_id, project_id, user_id, agent_id, agent_version, total_credits, session_model

@@ -19,9 +19,11 @@ from services.clickhouse.client import (
     _now_ms,
     _query,
     clickhouse_health,
+    string_array_param,
 )
 from services.clickhouse.insert import (
     _insert_webhook_deliveries,
+    clear_session_event_tokens,
     insert_audit_log,
     insert_session_capabilities,
     insert_session_checkpoint,
@@ -32,6 +34,7 @@ from services.clickhouse.migrations import run_clickhouse_migrations
 from services.clickhouse.query import (
     query_existing_for_dedup,
     query_recent_events,
+    query_response_token_rows,
     query_session_checkpoint,
     query_session_source_manifest,
     query_source_records_after,
@@ -60,6 +63,7 @@ __all__ = [
     "_query",
     "_resource_overrides",
     "apply_resource_settings",
+    "clear_session_event_tokens",
     "clickhouse_health",
     "init_clickhouse",
     "insert_audit_log",
@@ -68,9 +72,11 @@ __all__ = [
     "insert_session_events",
     "query_existing_for_dedup",
     "query_recent_events",
+    "query_response_token_rows",
     "query_session_checkpoint",
     "query_session_source_manifest",
     "query_source_records_after",
     "refresh_session_summary",
     "run_clickhouse_migrations",
+    "string_array_param",
 ]

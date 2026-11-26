@@ -160,3 +160,41 @@ async def query_existing_for_dedup(
     except Exception as e:
         optic.error("dedup query failed for session {}: {}", session_id, e)
         raise
+
+
+async def query_response_token_rows(
+    session_id: str,
+    project_id: str,
+    user_id: str,
+    harness: str,
+    response_keys: list[str],
+) -> list[tuple[int, str, int]]:
+    """Return ``(line_offset, response_key, output_tokens)`` for stored rows that carry a response's tokens."""
+    if not response_keys:
+        return []
+    sql = (
+        "SELECT line_offset, response_key, output_tokens FROM session_events FINAL "
+        "WHERE project_id = {pid:String} AND user_id = {uid:String} "
+        "AND harness = {harness:String} AND session_id = {sid:String} AND is_source_record = 1 AND rendered = 1 "
+        "AND has({keys:Array(String)}, response_key) "
+        "AND (input_tokens != 0 OR output_tokens != 0 OR cache_read_tokens != 0 OR cache_write_tokens != 0) "
+        "FORMAT JSON"
+    )
+    params = {
+        "param_pid": project_id,
+        "param_uid": user_id,
+        "param_harness": harness,
+        "param_sid": session_id,
+        "param_keys": _client.string_array_param(sorted(set(response_keys))),
+    }
+    try:
+        r = await _client._query(sql, params)
+        r.raise_for_status()
+        return [
+            (int(row["line_offset"]), str(row["response_key"]), int(row["output_tokens"]))
+            for row in r.json().get("data", [])
+        ]
+    except Exception as e:
+        # Fail the push rather than store a response's tokens twice; the client retries.
+        optic.error("response token query failed for session {}: {}", session_id, e)
+        raise

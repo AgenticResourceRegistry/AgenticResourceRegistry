@@ -178,7 +178,7 @@ async def _purge_legacy_insight_meta(cutoff_str: str) -> dict[str, int]:
     it is removed (it is a cache and only costs a recompute). An unparseable
     period cannot be shown to be fresh, so it is removed too.
     """
-    from services.clickhouse import _query
+    from services.clickhouse import _query, string_array_param
 
     cutoff = _parse_period(cutoff_str)
     if cutoff is None:
@@ -199,7 +199,7 @@ async def _purge_legacy_insight_meta(cutoff_str: str) -> dict[str, int]:
             ids = sorted({row.session_id for row in rows})
             response = await _query(
                 "SELECT DISTINCT session_id FROM session_events WHERE session_id IN {ids:Array(String)} FORMAT JSON",
-                {"param_ids": "[" + ",".join(_ch_string(value) for value in ids) + "]"},
+                {"param_ids": string_array_param(ids)},
                 timeout=RETENTION_QUERY_TIMEOUT,
             )
             response.raise_for_status()
@@ -221,11 +221,6 @@ async def _purge_legacy_insight_meta(cutoff_str: str) -> dict[str, int]:
             removed_cache += result.rowcount or 0
         await db.commit()
     return {"insight_session_meta": removed_meta, "insight_meta_cache": removed_cache}
-
-
-def _ch_string(value: str) -> str:
-    """Quote one element of a ClickHouse ``Array(String)`` query parameter."""
-    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 async def _purge_source_orphans(project_id: str, cutoff_str: str) -> dict[str, int]:

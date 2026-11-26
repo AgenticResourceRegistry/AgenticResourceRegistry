@@ -85,7 +85,7 @@ def parse_rows(rows: list[dict]) -> list[dict]:
             _handle_user(line, ts, harness, events, tool_use_index)
 
         elif msg_type == "assistant":
-            _handle_assistant(line, ts, harness, events, tool_use_index)
+            _handle_assistant(line, ts, harness, events, tool_use_index, row)
 
         elif msg_type == "system":
             system_text = str_field(line, "content")
@@ -182,12 +182,33 @@ def _handle_user(
         # else: orphan tool_result -- skip
 
 
+# Event attribute -> (stored session_events column, raw transcript usage key).
+_TOKEN_ATTRS = {
+    "input_tokens": ("input_tokens", "input_tokens"),
+    "output_tokens": ("output_tokens", "output_tokens"),
+    "cache_read_tokens": ("cache_read_tokens", "cache_read_input_tokens"),
+    "cache_creation_tokens": ("cache_write_tokens", "cache_creation_input_tokens"),
+}
+
+
+def _token_counts(usage: dict, row: dict | None) -> dict[str, int]:
+    """Token counts to show for one assistant line.
+
+    Every line of an API response repeats the response's full usage, while ingest
+    stores it on only one of them, so the stored columns win when the row has them.
+    """
+    if row is not None and all(column in row for column, _ in _TOKEN_ATTRS.values()):
+        return {attr: token_count(row, column) for attr, (column, _) in _TOKEN_ATTRS.items()}
+    return {attr: token_count(usage, key) for attr, (_, key) in _TOKEN_ATTRS.items()}
+
+
 def _handle_assistant(
     line: dict,
     ts: str,
     harness: str,
     events: list[dict],
     tool_use_index: dict[str, int],
+    row: dict | None = None,
 ) -> None:
     message = dict_field(line, "message")
     content = message.get("content", [])
@@ -195,14 +216,7 @@ def _handle_assistant(
     usage = dict_field(message, "usage")
     token_attrs: dict = {}
     if usage:
-        if usage.get("input_tokens"):
-            token_attrs["input_tokens"] = str(usage["input_tokens"])
-        if usage.get("output_tokens"):
-            token_attrs["output_tokens"] = str(usage["output_tokens"])
-        if usage.get("cache_read_input_tokens"):
-            token_attrs["cache_read_tokens"] = str(usage["cache_read_input_tokens"])
-        if usage.get("cache_creation_input_tokens"):
-            token_attrs["cache_creation_tokens"] = str(usage["cache_creation_input_tokens"])
+        token_attrs = {attr: str(count) for attr, count in _token_counts(usage, row).items() if count}
         if message.get("model"):
             token_attrs["model"] = message["model"]
         if message.get("stop_reason"):
@@ -265,9 +279,9 @@ def _handle_assistant(
             if tool_use_id:
                 tool_use_index[tool_use_id] = idx
 
-    # If token_attrs were not consumed by a text block (tool-only turn),
+    # If token counts were not consumed by a text block (tool-only turn),
     # emit a standalone token_usage event so the UI can show token counts.
-    if token_attrs:
+    if token_attrs.keys() & _TOKEN_ATTRS.keys():
         events.append(
             {
                 "timestamp": ts,
@@ -365,7 +379,9 @@ def meta_records(entries: list[dict]) -> list[dict]:
                 # Claude Code's own notice when the API refused the request ("Not logged in").
                 record["message"]["stopReason"] = "error"
             usage = dict_field(message, "usage")
-            if usage:
+            counted = record["message"].get("usage")
+            # Streaming lines can carry partial counts; the line with the most output is the response's usage.
+            if usage and (counted is None or token_count(usage, "output_tokens") > counted["output"]):
                 record["message"]["usage"] = meta_usage(
                     token_count(usage, "input_tokens"),
                     token_count(usage, "output_tokens"),

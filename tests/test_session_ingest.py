@@ -49,10 +49,14 @@ def external_calls(monkeypatch):
         insert=AsyncMock(),
         insert_checkpoint=AsyncMock(),
         refresh=AsyncMock(),
+        response_tokens=AsyncMock(return_value=[]),
+        clear_tokens=AsyncMock(),
         resolve_agent=AsyncMock(side_effect=lambda value: value),
         resolve_version=AsyncMock(side_effect=lambda _agent_id, value: value),
     )
     monkeypatch.setattr(session_ingest, "query_existing_for_dedup", calls.dedup)
+    monkeypatch.setattr(session_ingest, "query_response_token_rows", calls.response_tokens)
+    monkeypatch.setattr(session_ingest, "clear_session_event_tokens", calls.clear_tokens)
     monkeypatch.setattr(session_ingest, "query_session_checkpoint", calls.checkpoint)
     monkeypatch.setattr(session_ingest, "query_session_source_manifest", calls.manifest)
     monkeypatch.setattr(session_ingest, "query_source_records_after", calls.records)
@@ -610,6 +614,226 @@ async def test_clickhouse_failures_propagate_and_stop_later_writes(external_call
         external_calls.refresh.assert_not_awaited()
     else:
         external_calls.insert.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# One API response, many transcript lines: tokens are counted once (#2213)
+# ---------------------------------------------------------------------------
+
+RESPONSE_USAGE = {
+    "input_tokens": 3,
+    "output_tokens": 344,
+    "cache_read_input_tokens": 1200,
+    "cache_creation_input_tokens": 16743,
+}
+BILLED = {"input_tokens": 3, "output_tokens": 344, "cache_read_tokens": 1200, "cache_write_tokens": 16743}
+NO_TOKENS = dict.fromkeys(BILLED, 0)
+THINKING_BLOCK = {"type": "thinking", "thinking": "Inspect the repository first."}
+TEXT_BLOCK = {"type": "text", "text": "Reading the README."}
+TOOL_USE_BLOCK = {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "README.md"}}
+
+
+def _response_line(block: dict, message_id: str = "msg_1", request_id: str | None = "req_1", **usage) -> str:
+    """One transcript line holding one content block of an API response, repeating its whole usage.
+
+    Carries both ``type`` (Claude Code, OpenCode) and ``role`` (Cursor) so every
+    harness that shares the Claude Code usage format classifies it as assistant.
+    """
+    line = {
+        "type": "assistant",
+        "role": "assistant",
+        "uuid": f"{message_id}-{block['type']}",
+        "timestamp": "2026-11-18T10:00:00.000Z",
+        "message": {
+            "id": message_id,
+            "model": "claude-opus-4-6",
+            "role": "assistant",
+            "content": [block],
+            "usage": {**RESPONSE_USAGE, **usage},
+        },
+    }
+    if request_id is not None:
+        line["requestId"] = request_id
+    return json.dumps(line)
+
+
+def _tokens(row: dict) -> dict[str, int]:
+    return {column: row[column] for column in BILLED}
+
+
+def _session_totals(rows: list[dict]) -> dict[str, int]:
+    """Totals as ``refresh_session_summary`` computes them: ``sumIf(column, rendered = 1)``."""
+    return {column: sum(row[column] for row in rows if row["rendered"] == 1) for column in BILLED}
+
+
+@pytest.mark.parametrize("harness", ["claude-code", "cursor", "opencode"])
+async def test_response_split_into_content_block_lines_counts_its_tokens_once(external_calls, harness: str):
+    lines = [_response_line(THINKING_BLOCK), _response_line(TEXT_BLOCK), _response_line(TOOL_USE_BLOCK)]
+
+    await _ingest(lines, harness=harness)
+
+    rows = external_calls.insert.await_args.args[0]
+    assert [row["response_key"] for row in rows] == ["msg_1:req_1"] * 3
+    assert [_tokens(row) for row in rows] == [BILLED, NO_TOKENS, NO_TOKENS]
+    assert _session_totals(rows) == BILLED
+    assert [row["raw_line"] for row in rows] == lines
+    external_calls.response_tokens.assert_awaited_once_with(SESSION_ID, PROJECT_ID, USER_ID, harness, ["msg_1:req_1"])
+    external_calls.clear_tokens.assert_not_awaited()
+
+
+async def test_line_with_the_most_output_carries_partial_streaming_counts(external_calls):
+    lines = [
+        _response_line(THINKING_BLOCK, output_tokens=5),
+        _response_line(TEXT_BLOCK),
+        _response_line(TOOL_USE_BLOCK),
+    ]
+
+    await _ingest(lines)
+
+    rows = external_calls.insert.await_args.args[0]
+    assert [_tokens(row) for row in rows] == [NO_TOKENS, BILLED, NO_TOKENS]
+
+
+async def test_each_distinct_response_keeps_its_own_tokens(external_calls):
+    lines = [
+        _response_line(THINKING_BLOCK, "msg_1", "req_1"),
+        _response_line(TOOL_USE_BLOCK, "msg_1", "req_1"),
+        _response_line(TEXT_BLOCK, "msg_2", "req_2", output_tokens=40),
+        _response_line(TOOL_USE_BLOCK, "msg_2", "req_2", output_tokens=40),
+        # Same message id under another request is another response.
+        _response_line(TEXT_BLOCK, "msg_1", "req_3", output_tokens=7),
+        # No requestId: the message id alone identifies the response.
+        _response_line(TEXT_BLOCK, "msg_4", None, output_tokens=9),
+    ]
+
+    await _ingest(lines)
+
+    rows = external_calls.insert.await_args.args[0]
+    assert [row["response_key"] for row in rows] == [
+        "msg_1:req_1",
+        "msg_1:req_1",
+        "msg_2:req_2",
+        "msg_2:req_2",
+        "msg_1:req_3",
+        "msg_4",
+    ]
+    assert [row["output_tokens"] for row in rows] == [344, 0, 40, 0, 7, 9]
+    assert _session_totals(rows)["input_tokens"] == 4 * RESPONSE_USAGE["input_tokens"]
+    assert sorted(external_calls.response_tokens.await_args.args[4]) == [
+        "msg_1:req_1",
+        "msg_1:req_3",
+        "msg_2:req_2",
+        "msg_4",
+    ]
+
+
+async def test_response_continued_in_a_later_push_keeps_the_stored_tokens(external_calls):
+    external_calls.response_tokens.return_value = [(4, "msg_1:req_1", 344)]
+
+    await _ingest([_response_line(TOOL_USE_BLOCK)], start_offset=5)
+
+    rows = external_calls.insert.await_args.args[0]
+    assert _tokens(rows[0]) == NO_TOKENS
+    external_calls.clear_tokens.assert_not_awaited()
+
+
+async def test_later_line_with_more_output_takes_the_tokens_from_the_stored_row(external_calls):
+    order: list[str] = []
+    external_calls.insert.side_effect = lambda _rows: order.append("insert")
+    external_calls.clear_tokens.side_effect = lambda *_args: order.append("clear")
+    external_calls.response_tokens.return_value = [(4, "msg_1:req_1", 5)]
+
+    await _ingest([_response_line(TOOL_USE_BLOCK)], start_offset=5)
+
+    rows = external_calls.insert.await_args.args[0]
+    assert _tokens(rows[0]) == BILLED
+    external_calls.clear_tokens.assert_awaited_once_with(SESSION_ID, PROJECT_ID, USER_ID, "claude-code", [4])
+    assert order == ["insert", "clear"]
+    external_calls.refresh.assert_awaited_once()
+
+
+async def test_stored_row_rewritten_by_the_batch_does_not_count_as_stored(external_calls):
+    external_calls.dedup.return_value = {5: "stale-hash"}
+    external_calls.checkpoint.return_value = (4, 40)
+    external_calls.response_tokens.return_value = [(5, "msg_1:req_1", 344)]
+
+    await _ingest([_response_line(THINKING_BLOCK), _response_line(TOOL_USE_BLOCK)], start_offset=5)
+
+    rows = external_calls.insert.await_args.args[0]
+    assert [row["line_offset"] for row in rows] == [5, 6]
+    assert [_tokens(row) for row in rows] == [BILLED, NO_TOKENS]
+    external_calls.clear_tokens.assert_not_awaited()
+
+
+async def test_reingesting_a_stored_response_writes_nothing(external_calls):
+    lines = [_response_line(THINKING_BLOCK), _response_line(TOOL_USE_BLOCK)]
+    external_calls.dedup.return_value = {
+        offset: xxhash.xxh128(line.encode()).hexdigest() for offset, line in enumerate(lines)
+    }
+    external_calls.checkpoint.return_value = (1, 10)
+
+    result = await _ingest(lines)
+
+    assert result == session_ingest.IngestResult(ingested=0, skipped=2, errors=0)
+    external_calls.response_tokens.assert_not_awaited()
+    external_calls.insert.assert_not_awaited()
+    external_calls.clear_tokens.assert_not_awaited()
+
+
+async def test_lines_without_a_response_id_keep_their_own_tokens(external_calls):
+    cursor_stop_usage = json.dumps(
+        {
+            "role": "assistant",
+            "message": {
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "model": "cursor-model",
+            },
+        }
+    )
+
+    await _ingest([CLAUDE_ASSISTANT_TEXT, CLAUDE_ASSISTANT_TEXT])
+    await _ingest([cursor_stop_usage, cursor_stop_usage], harness="cursor")
+    await _ingest([PI_ASSISTANT_TEXT, PI_ASSISTANT_TEXT], harness="pi")
+
+    claude_rows, cursor_rows, pi_rows = (call.args[0] for call in external_calls.insert.await_args_list)
+    assert [row["output_tokens"] for row in claude_rows] == [20, 20]
+    assert [row["output_tokens"] for row in cursor_rows] == [5, 5]
+    assert all(row["response_key"] == "" for row in claude_rows + cursor_rows + pi_rows)
+    external_calls.response_tokens.assert_not_awaited()
+
+
+async def test_response_token_lookup_failure_stops_before_any_write(external_calls):
+    external_calls.response_tokens.side_effect = RuntimeError("response tokens unavailable")
+
+    with pytest.raises(RuntimeError, match="response tokens unavailable"):
+        await _ingest([_response_line(TEXT_BLOCK)])
+
+    external_calls.insert.assert_not_awaited()
+    external_calls.refresh.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("parsed", "expected"),
+    [
+        ({"message": {"id": "msg_1"}, "requestId": "req_1"}, "msg_1:req_1"),
+        ({"message": {"id": "msg_1"}}, "msg_1"),
+        ({"message": {"id": "msg_1"}, "requestId": 7}, "msg_1"),
+        ({"message": {"id": ""}, "requestId": "req_1"}, ""),
+        ({"message": {"id": ["msg_1"]}, "requestId": "req_1"}, ""),
+        ({"message": "msg_1", "requestId": "req_1"}, ""),
+        ({"requestId": "req_1"}, ""),
+    ],
+)
+def test_response_key_tolerates_malformed_transcript_fields(parsed: dict, expected: str):
+    assert session_ingest._extract_response_key(parsed, "claude-code") == expected
+
+
+def test_response_key_is_only_read_for_harnesses_that_split_responses():
+    parsed = {"message": {"id": "msg_1"}, "requestId": "req_1"}
+
+    assert session_ingest._extract_response_key(parsed, "pi") == ""
+    assert session_ingest._extract_response_key(parsed, "kiro") == ""
 
 
 @pytest.mark.parametrize(

@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "observal-server"))
 
-from services.session_parsers.claude_code import parse_rows
+from services.session_parsers.claude_code import meta_records, parse_rows
 
 # ── Sample Claude Code JSONL lines ────────────────────────────────────────────
 
@@ -263,3 +263,98 @@ class TestClaudeCodeSessionParser:
         assert events[4]["attributes"]["input_tokens"] == "3"
         assert events[5]["body"] == "Observal is an agent registry and observability platform."
         assert events[5]["attributes"]["cache_read_tokens"] == "16743"
+
+    # The events endpoint returns the stored token columns. Ingest keeps an API
+    # response's tokens on one of its lines, while every raw line repeats them.
+    def test_stored_token_columns_count_a_split_response_once(self):
+        lines = [line for line in REAL_SESSION_FIXTURE.strip().split("\n") if line]
+        # msg-1 is written as a thinking line (5) and a tool_use line (6); msg-2 is one line (8).
+        stored = {5: (3, 344, 0, 16743), 8: (1, 680, 16743, 4847)}
+        rows = []
+        for index, line in enumerate(lines):
+            input_tokens, output_tokens, cache_read, cache_write = stored.get(index, (0, 0, 0, 0))
+            rows.append(
+                {
+                    "raw_line": line,
+                    "harness": "claude-code",
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cache_read_tokens": cache_read,
+                    "cache_write_tokens": cache_write,
+                }
+            )
+
+        events = parse_rows(rows)
+
+        assert [event["event_name"] for event in events] == [
+            "hook_userpromptsubmit",
+            "hook_assistant_thinking",
+            "hook_token_usage",
+            "hook_posttooluse",
+            "hook_assistant_response",
+        ]
+        # What the trace page adds up: one usage per API response.
+        assert sum(int(event["attributes"].get("output_tokens", 0)) for event in events) == 344 + 680
+        assert sum(int(event["attributes"].get("cache_creation_tokens", 0)) for event in events) == 16743 + 4847
+        assert events[4]["attributes"]["model"] == "claude-opus-4-6"
+
+    def test_stored_zero_tokens_override_the_repeated_raw_usage(self):
+        stored_zero = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0}
+        rows = [
+            {"raw_line": ASSISTANT_TEXT, "harness": "claude-code", **stored_zero},
+            {"raw_line": ASSISTANT_TOOL_USAGE_ONLY, "harness": "claude-code", **stored_zero},
+        ]
+
+        events = parse_rows(rows)
+
+        assert [event["event_name"] for event in events] == ["hook_assistant_response", "hook_posttooluse"]
+        assert events[0]["attributes"] == {
+            "tool_response": "I am Claude.",
+            "model": "claude-3-5-sonnet-20241022",
+            "stop_reason": "end_turn",
+        }
+
+    def test_stored_token_columns_replace_raw_counts(self):
+        rows = [
+            {
+                "raw_line": ASSISTANT_TEXT,
+                "harness": "claude-code",
+                "input_tokens": 11,
+                "output_tokens": 22,
+                "cache_read_tokens": 33,
+                "cache_write_tokens": 44,
+            }
+        ]
+
+        attrs = parse_rows(rows)[0]["attributes"]
+
+        assert (attrs["input_tokens"], attrs["output_tokens"]) == ("11", "22")
+        assert (attrs["cache_read_tokens"], attrs["cache_creation_tokens"]) == ("33", "44")
+
+
+class TestClaudeCodeMetaRecords:
+    def test_split_response_usage_is_counted_once_with_the_most_output(self):
+        def line(block: dict, output_tokens: int) -> dict:
+            return {
+                "type": "assistant",
+                "timestamp": "2026-11-18T10:00:00.000Z",
+                "requestId": "req_1",
+                "message": {
+                    "id": "msg_1",
+                    "model": "claude-opus-4-6",
+                    "content": [block],
+                    "usage": {"input_tokens": 3, "output_tokens": output_tokens, "cache_creation_input_tokens": 9},
+                },
+            }
+
+        records = meta_records(
+            [
+                line({"type": "thinking", "thinking": "Plan"}, 5),
+                line({"type": "text", "text": "Done"}, 344),
+                line({"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}}, 12),
+            ]
+        )
+
+        assistants = [record for record in records if record.get("message", {}).get("role") == "assistant"]
+        assert len(assistants) == 1
+        assert assistants[0]["message"]["usage"] == {"input": 3, "output": 344, "cacheRead": 0, "cacheWrite": 9}
