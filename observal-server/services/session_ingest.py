@@ -34,7 +34,8 @@ from services.clickhouse import (
     refresh_session_summary,
 )
 from services.secrets_redactor import redact_secrets
-from services.session_parsers.base import dict_field, str_field, token_count, uncached_input_tokens
+from services.session_parsers.base import token_count, uncached_input_tokens
+from services.session_parsers.claude_code import response_key as _response_key_claude_code
 from services.session_parsers.ingest_classify import extract_timestamp, get_classifier, get_extra_rows
 from services.session_parsers.kiro import extract_usage as _usage_kiro
 
@@ -253,20 +254,6 @@ def _extract_uuid(parsed: dict, harness: str = "claude-code") -> tuple[str | Non
 # ---------------------------------------------------------------------------
 # Per-harness API response identity (dispatch pattern)
 # ---------------------------------------------------------------------------
-
-
-def _response_key_claude_code(parsed: dict) -> str:
-    """Claude Code / Cursor / OpenCode: ``message.id`` plus the top-level ``requestId``.
-
-    Claude Code writes one line per content block (thinking, text, tool use) and
-    every line repeats the whole response's usage, so lines sharing this key are
-    one API response whose tokens must be counted once.
-    """
-    message_id = str_field(dict_field(parsed, "message"), "id")
-    if not message_id:
-        return ""
-    request_id = str_field(parsed, "requestId")
-    return f"{message_id}:{request_id}" if request_id else message_id
 
 
 _RESPONSE_KEY_EXTRACTORS: dict[str, Callable[[dict], str]] = {

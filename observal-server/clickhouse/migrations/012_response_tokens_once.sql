@@ -3,7 +3,7 @@
 -- Claude Code writes one transcript line per content block of an API response and
 -- repeats the whole response's usage on each line, so summing rows counted every
 -- response's tokens once per line. Ingest now keys rows by API response
--- (message.id plus requestId, as services.session_ingest._response_key_claude_code)
+-- (message.id plus requestId, as services.session_parsers.claude_code.response_key)
 -- and keeps the tokens on one row per response. This applies the same rule to rows
 -- already stored: the rendered row with the most output tokens keeps them (lowest
 -- line_offset on a tie), the other rows of the response are zeroed, and every keyed
@@ -18,6 +18,11 @@
 -- are never parsed. A few stored lines are not valid JSON because secret redaction
 -- swallowed a closing quote inside the content; the message and request ids sit
 -- outside the content, so for those lines they are read textually.
+--
+-- A failed run can commit part of the insert before the whole file is retried.
+-- Rows keyed by that run still take part in electing the carrier (only unkeyed
+-- rows are rewritten): a committed carrier keeps its tokens and wins the election
+-- again, so the retry never elects a second carrier for the same response.
 ALTER TABLE session_events ADD COLUMN IF NOT EXISTS response_key String DEFAULT '' CODEC(ZSTD(1));
 
 INSERT INTO session_events
@@ -58,7 +63,7 @@ INNER JOIN
                extract(raw_line, '"requestId":\\s*"([^"\\\\]+)"')) AS request_id,
             if(request_id = '', message_id, concat(message_id, ':', request_id)) AS response_key_backfill
         FROM session_events FINAL
-        WHERE harness IN ('claude-code', 'cursor', 'opencode') AND is_source_record = 1 AND response_key = ''
+        WHERE harness IN ('claude-code', 'cursor', 'opencode') AND is_source_record = 1
           AND event_type IN ('assistant_text', 'thinking', 'tool_call')
     )
     WHERE message_id != ''

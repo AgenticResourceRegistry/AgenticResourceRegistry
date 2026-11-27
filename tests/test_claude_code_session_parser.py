@@ -332,29 +332,42 @@ class TestClaudeCodeSessionParser:
         assert (attrs["cache_read_tokens"], attrs["cache_creation_tokens"]) == ("33", "44")
 
 
+def _meta_line(block: dict, output_tokens: int, request_id: str = "req_1") -> dict:
+    return {
+        "type": "assistant",
+        "timestamp": "2026-11-18T10:00:00.000Z",
+        "requestId": request_id,
+        "message": {
+            "id": "msg_1",
+            "model": "claude-opus-4-6",
+            "content": [block],
+            "usage": {"input_tokens": 3, "output_tokens": output_tokens, "cache_creation_input_tokens": 9},
+        },
+    }
+
+
+def _meta_usages(records: list[dict]) -> list[dict]:
+    return [record["message"]["usage"] for record in records if record.get("message", {}).get("role") == "assistant"]
+
+
 class TestClaudeCodeMetaRecords:
     def test_split_response_usage_is_counted_once_with_the_most_output(self):
-        def line(block: dict, output_tokens: int) -> dict:
-            return {
-                "type": "assistant",
-                "timestamp": "2026-11-18T10:00:00.000Z",
-                "requestId": "req_1",
-                "message": {
-                    "id": "msg_1",
-                    "model": "claude-opus-4-6",
-                    "content": [block],
-                    "usage": {"input_tokens": 3, "output_tokens": output_tokens, "cache_creation_input_tokens": 9},
-                },
-            }
-
         records = meta_records(
             [
-                line({"type": "thinking", "thinking": "Plan"}, 5),
-                line({"type": "text", "text": "Done"}, 344),
-                line({"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}}, 12),
+                _meta_line({"type": "thinking", "thinking": "Plan"}, 5),
+                _meta_line({"type": "text", "text": "Done"}, 344),
+                _meta_line({"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}}, 12),
             ]
         )
 
-        assistants = [record for record in records if record.get("message", {}).get("role") == "assistant"]
-        assert len(assistants) == 1
-        assert assistants[0]["message"]["usage"] == {"input": 3, "output": 344, "cacheRead": 0, "cacheWrite": 9}
+        assert _meta_usages(records) == [{"input": 3, "output": 344, "cacheRead": 0, "cacheWrite": 9}]
+
+    def test_requests_sharing_a_message_id_are_separate_responses(self):
+        records = meta_records(
+            [
+                _meta_line({"type": "text", "text": "First"}, 100, request_id="req_1"),
+                _meta_line({"type": "text", "text": "Retry"}, 20, request_id="req_2"),
+            ]
+        )
+
+        assert [usage["output"] for usage in _meta_usages(records)] == [100, 20]

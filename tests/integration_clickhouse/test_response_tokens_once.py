@@ -129,9 +129,15 @@ async def test_migration_corrects_stored_sessions_and_ingest_counts_each_respons
             shutil.copy(path, tmp_path / path.name)
     monkeypatch.setattr(migrations, "MIGRATIONS_DIR", tmp_path)
     await migrations.run_clickhouse_migrations()
+    legacy_rows: list[dict] = []
+
+    async def legacy_insert(rows: list[dict]) -> None:
+        legacy_rows.extend(dict(row) for row in rows)
+        await _legacy_insert(rows)
+
     with monkeypatch.context() as legacy:
         legacy.setattr(session_ingest, "_count_each_response_once", _count_every_line)
-        legacy.setattr(session_ingest, "insert_session_events", _legacy_insert)
+        legacy.setattr(session_ingest, "insert_session_events", legacy_insert)
         await _push("legacy", LEGACY_LINES)
     before = await _events("legacy", response_key=False)
     inflated = await _summary("legacy")
@@ -162,6 +168,16 @@ async def test_migration_corrects_stored_sessions_and_ingest_counts_each_respons
     assert all(after[i]["ingested_at"] == before[i]["ingested_at"] for i in untouched)
     await migrations.run_clickhouse_migrations()
     assert await _summary("legacy") == LEGACY_BILLED
+
+    # A failed run can commit part of its insert and is then retried in full. Here msg_a's
+    # carrier (offset 2) was committed and its sibling at offset 3 was not; the retry must
+    # keep the committed carrier rather than elect offset 3 as a second one.
+    uncommitted = next(row for row in legacy_rows if row["line_offset"] == 3)
+    await _legacy_insert([dict(uncommitted)])
+    assert int((await _events("legacy"))[3]["output_tokens"]) == 344
+    await migrations._run_file(real_migrations / "012_response_tokens_once.sql")
+    assert await _summary("legacy") == LEGACY_BILLED
+    assert [int(row["output_tokens"]) for row in await _events("legacy")][1:4] == [0, 344, 0]
 
     # A response split across two pushes; the later line reports more output.
     await _push("live", [_response_line(THINKING_BLOCK, "msg_c", "req_c", output_tokens=5)])

@@ -44,6 +44,21 @@ _META_TYPES = {
 }
 
 
+def response_key(entry: dict) -> str:
+    """The API response a transcript line belongs to: ``message.id`` plus the top-level ``requestId``.
+
+    Claude Code writes one line per content block (thinking, text, tool use) and
+    every line repeats the whole response's usage, so lines sharing this key are
+    one API response whose tokens must be counted once. "" when the line has no
+    message id. Cursor and OpenCode reuse it.
+    """
+    message_id = str_field(dict_field(entry, "message"), "id")
+    if not message_id:
+        return ""
+    request_id = str_field(entry, "requestId")
+    return f"{message_id}:{request_id}" if request_id else message_id
+
+
 def parse_rows(rows: list[dict]) -> list[dict]:
     """Parse raw_line Claude Code JSONL rows into normalised frontend events.
 
@@ -368,7 +383,7 @@ def meta_records(entries: list[dict]) -> list[dict]:
         content = message.get("content")
 
         if line_type == "assistant":
-            message_id = str_field(message, "id") or str(len(records))
+            message_id = response_key(entry) or str(len(records))
             record = assistants.get(message_id)
             if record is None:
                 model = str_field(message, "model")
