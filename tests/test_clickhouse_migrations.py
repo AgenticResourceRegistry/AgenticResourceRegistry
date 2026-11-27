@@ -88,6 +88,33 @@ async def test_run_clickhouse_migrations_skips_applied_files(tmp_path, monkeypat
     assert any(sql.startswith("INSERT INTO clickhouse_schema_migrations") for sql in executed_sql)
 
 
+async def test_migration_statements_outlast_the_ingest_query_timeouts(tmp_path, monkeypatch):
+    from services.clickhouse import migrations
+
+    (tmp_path / "002_backfill.sql").write_text("INSERT INTO t SELECT 1;\n")
+    statement_calls: list[tuple[dict | None, dict]] = []
+
+    async def fake_query(sql: str, params: dict | None = None, **kwargs):
+        if sql.startswith("INSERT INTO t"):
+            statement_calls.append((params, kwargs))
+        return _resp()
+
+    monkeypatch.setattr(migrations, "MIGRATIONS_DIR", tmp_path)
+    monkeypatch.setattr(migrations, "_query_server", AsyncMock(return_value=_resp()))
+    monkeypatch.setattr(migrations._client, "clickhouse_health", AsyncMock(return_value=True))
+    monkeypatch.setattr(migrations._client, "_query", fake_query)
+
+    await migrations.run_clickhouse_migrations()
+
+    assert statement_calls == [
+        (
+            {"wait_for_async_insert": "1", "max_execution_time": "3600"},
+            {"timeout": migrations.MIGRATION_STATEMENT_TIMEOUT},
+        )
+    ]
+    assert migrations.MIGRATION_STATEMENT_TIMEOUT > 300
+
+
 @pytest.mark.asyncio
 async def test_run_clickhouse_migrations_stamps_existing_baseline(tmp_path, monkeypatch):
     from services.clickhouse import migrations

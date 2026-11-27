@@ -55,7 +55,7 @@ def parse_rows(rows: list[dict]) -> list[dict]:
             _clean_user_content(line)
             _handle_user(line, ts, harness, events, tool_use_index)
         elif role == "assistant":
-            _handle_assistant(line, ts, harness, events, tool_use_index)
+            _handle_assistant(line, ts, harness, events, tool_use_index, row)
         else:
             events.append(basic_event(row))
 

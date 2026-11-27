@@ -42,6 +42,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- count each Claude Code API response's tokens once: every transcript line of a response repeated its usage, which overstated session token totals about 2–3×. Ingest keeps the usage on one line per response, including responses split across pushes, the trace view shows the stored counts, and ClickHouse migration 012 corrects existing sessions (#2213)
 - cap Typer below 0.29, which makes every `observal` command fail when the package is installed with a fresh dependency resolution (`uv tool install`, `pipx`)
 - accept Kiro universal array hooks across doctor, scan, inventory, and agent profile rewrites; preserve user hooks and skip unreadable profiles (#2015, #2024)
 - install and refresh array-based Kiro registry hook files without duplicating named entries or replacing unrelated hooks (#2020)

@@ -88,6 +88,16 @@ async def _insert_webhook_deliveries(records: list[dict]):
         optic.error("failed to record {} webhook deliveries in ClickHouse: {}", len(records), exc)
 
 
+_TOKEN_COLUMNS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+# Every written column; ``ingested_at`` is left to its now64(3) default, which is the replacement version.
+_SESSION_EVENT_COLUMNS = (
+    "session_id, project_id, user_id, agent_id, agent_version, layer_hash, harness, line_offset, "
+    "source_end_offset, line_hash, source_sha256, is_source_record, rendered, event_type, timestamp, uuid, "
+    "parent_uuid, tool_name, tool_id, content_preview, content_length, raw_line, credits, parent_session_id, "
+    "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, model, raw_line_truncated, response_key"
+)
+
+
 async def insert_session_events(rows: list[dict]):
     """Batch insert canonical session source rows into ClickHouse."""
     optic.trace("inserting {} session events into ClickHouse", len(rows))
@@ -98,13 +108,8 @@ async def insert_session_events(rows: list[dict]):
         row.setdefault("is_source_record", 1)
         row.setdefault("rendered", 1)
         row.setdefault("raw_line_truncated", 0)
-    sql = (
-        "INSERT INTO session_events (session_id, project_id, user_id, agent_id, "
-        "agent_version, layer_hash, harness, line_offset, source_end_offset, line_hash, source_sha256, "
-        "is_source_record, rendered, event_type, timestamp, uuid, parent_uuid, "
-        "tool_name, tool_id, content_preview, content_length, raw_line, credits, parent_session_id, "
-        "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, model, raw_line_truncated) FORMAT JSONEachRow"
-    )
+        row.setdefault("response_key", "")
+    sql = f"INSERT INTO session_events ({_SESSION_EVENT_COLUMNS}) FORMAT JSONEachRow"
     try:
         r = await _client._query(
             sql,
@@ -115,6 +120,45 @@ async def insert_session_events(rows: list[dict]):
     except Exception as e:
         optic.error("failed to insert {} session events - session will appear incomplete: {}", len(rows), e)
         raise
+
+
+async def clear_session_event_tokens(
+    session_id: str,
+    project_id: str,
+    user_id: str,
+    harness: str,
+    line_offsets: list[int],
+) -> None:
+    """Re-insert stored source rows with zero token counts.
+
+    Used when a later line of the same API response takes over its token counts.
+    The copy gets a newer ``ingested_at``, so it replaces the stored row; every
+    other column, ``raw_line`` included, is copied unchanged.
+    """
+    if not line_offsets:
+        return
+    projection = ", ".join(
+        f"0 AS {column}" if column in _TOKEN_COLUMNS else column
+        for column in (name.strip() for name in _SESSION_EVENT_COLUMNS.split(","))
+    )
+    sql = (
+        f"INSERT INTO session_events ({_SESSION_EVENT_COLUMNS}) SELECT {projection} FROM session_events FINAL "
+        "WHERE project_id = {pid:String} AND user_id = {uid:String} AND harness = {harness:String} "
+        "AND session_id = {sid:String} AND is_source_record = 1 AND has({offsets:Array(UInt32)}, line_offset)"
+    )
+    params = {
+        "param_pid": project_id,
+        "param_uid": user_id,
+        "param_harness": harness,
+        "param_sid": session_id,
+        "param_offsets": "[" + ",".join(str(int(offset)) for offset in sorted(set(line_offsets))) + "]",
+        # Clearing the same rows again must not be dropped as a duplicate block.
+        "insert_deduplicate": "0",
+        "wait_for_async_insert": "1",
+    }
+    r = await _client._query(sql, params)
+    r.raise_for_status()
+    optic.debug("cleared tokens on {} superseded rows for session={}", len(set(line_offsets)), session_id)
 
 
 async def insert_session_checkpoint(

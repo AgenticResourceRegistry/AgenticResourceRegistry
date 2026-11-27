@@ -413,7 +413,7 @@ async def get_session(
         "SELECT "
         "line_offset, timestamp, event_type, content_preview, tool_name, tool_id, "
         "uuid, parent_uuid, content_length, harness, agent_id, agent_version, raw_line, raw_line_truncated, "
-        "credits, ingested_at, "
+        "credits, ingested_at, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
         # Incremental reads may omit the reasoning record that identified the model.
         "(SELECT anyLast(model) FROM session_stats_agg FINAL WHERE session_id = {sid:String} "
         "AND project_id = {pid:String} AND user_id = {uid:String} AND harness = {harness:String}) AS session_model "
@@ -432,7 +432,8 @@ async def get_session(
     _sub_sql = (
         "SELECT session_id, timestamp, event_type, content_preview, "
         "tool_name, tool_id, uuid, parent_uuid, content_length, harness, "
-        "raw_line, raw_line_truncated, credits, ingested_at, line_offset "
+        "raw_line, raw_line_truncated, credits, ingested_at, line_offset, "
+        "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens "
         "FROM session_events FINAL "
         "WHERE parent_session_id = {sid:String} AND "
         + identity_filter

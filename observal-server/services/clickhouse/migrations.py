@@ -13,6 +13,9 @@ import services.clickhouse.client as _client
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "clickhouse" / "migrations"
 MIGRATIONS_TABLE = "clickhouse_schema_migrations"
+# Data migrations rewrite whole tables at startup. The ingest client's timeout (10 s by
+# default) and the 300 s query ceiling would abort them on real data volumes.
+MIGRATION_STATEMENT_TIMEOUT = 3600.0
 BASELINE_VERSION = "001_baseline"
 BASELINE_NAME = f"{BASELINE_VERSION}.sql"
 BASELINE_TABLES = frozenset(
@@ -145,7 +148,11 @@ async def _run_file(path: Path) -> None:
     statements = _split_sql(path.read_text())
     optic.info("applying ClickHouse migration {} ({} statements)", path.name, len(statements))
     for stmt in statements:
-        resp = await _client._query(stmt, {"wait_for_async_insert": "1"})
+        resp = await _client._query(
+            stmt,
+            {"wait_for_async_insert": "1", "max_execution_time": str(int(MIGRATION_STATEMENT_TIMEOUT))},
+            timeout=MIGRATION_STATEMENT_TIMEOUT,
+        )
         if resp.status_code >= 400:
             raise RuntimeError(f"ClickHouse migration {path.name} failed: {_response_text(resp)[:200]}")
     await _record_applied(version, path.name)
